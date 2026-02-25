@@ -1,21 +1,39 @@
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
-  line-height: 1.5;
-  color: #222;
-  background: #f7f7f7;
+  background: #000;
+  color: #00ff88;
+  font-family: "Courier New", monospace;
+  height: 100vh;
+  padding: 20px;
 }
 
-.container {
-  max-width: 720px;
-  margin: 4rem auto;
-  padding: 0 1rem;
+#terminal {
+  max-width: 900px;
 }
 
-h1 {
-  margin: 0 0 0.5rem;
+.prompt {
+  margin-right: 8px;
+}
+
+.input-line {
+  display: flex;
+}
+
+#commandInput {
+  background: transparent;
+  border: none;
+  color: #00ff88;
+  outline: none;
+  flex: 1;
+  font-family: inherit;
+  font-size: 1rem;
+}
+
+#output div {
+  margin-bottom: 5px;
 }

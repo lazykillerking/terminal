@@ -3,15 +3,17 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Simple boilerplate page" />
   <title>terminal</title>
   <link rel="stylesheet" href="style.css" />
-  <script src="script.js" defer></script>
 </head>
 <body>
-  <main class="container">
-    <h1>Terminal</h1>
-    <p>my terminal</p>
-  </main>
+  <div id="terminal">
+    <div id="output"></div>
+    <div class="input-line">
+      <span class="prompt">lkk@terminal:~$</span>
+      <input type="text" id="commandInput" autofocus />
+    </div>
+  </div>
+  <script src="script.js"></script>
 </body>
 </html>
