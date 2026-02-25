@@ -143,6 +143,10 @@ async function setLocalSudoPassword(password) {
   localStorage.setItem(LOCAL_SUDO_HASH_KEY, hashed);
 }
 
+function clearLocalSudoPassword() {
+  localStorage.removeItem(LOCAL_SUDO_HASH_KEY);
+}
+
 function describeNodeType(path, node) {
   if (!node) return "cannot open";
   if (node.type === "dir") return "directory";
@@ -319,7 +323,7 @@ function registerCommands() {
     name: "about",
     description: "Show terminal version",
     async run() {
-      return { text: "LazyKillerKing Terminal v4.1.1" };
+      return { text: "LazyKillerKing Terminal v4.1.2" };
     },
   });
 
@@ -554,24 +558,30 @@ function registerCommands() {
       }
       if (args[0] === "-s") {
         pendingSudo = { mode: "session" };
-        return { text: "Password:", type: "info", suppressPrompt: true };
+        return { text: "Password (type and press Enter):", type: "info", suppressPrompt: true };
       }
 
       pendingSudo = { mode: "command", commandLine: args.join(" ") };
-      return { text: "Password:", type: "info", suppressPrompt: true };
+      return { text: "Password (type and press Enter):", type: "info", suppressPrompt: true };
     },
   });
 
   registerCommand({
     name: "passwd",
     description: "Change sudo password (browser-local hash)",
-    async run() {
+    async run(args) {
+      if (args[0] === "--use-public") {
+        clearLocalSudoPassword();
+        clearSudoSession();
+        pendingPasswd = null;
+        return { text: "passwd: local override removed, using public hash", type: "success" };
+      }
       if (!getConfiguredSudoHash()) {
         pendingPasswd = { step: "new", newPassword: "" };
-        return { text: "New password:", type: "info", suppressPrompt: true };
+        return { text: "New password (type and press Enter):", type: "info", suppressPrompt: true };
       }
       pendingPasswd = { step: "current", newPassword: "" };
-      return { text: "Current password:", type: "info", suppressPrompt: true };
+      return { text: "Current password (type and press Enter):", type: "info", suppressPrompt: true };
     },
   });
 }

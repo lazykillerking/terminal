@@ -1,3 +1,3 @@
 window.TERMINAL_SECRET = {
-  sudoHash: "8c579d659ae1f8200c9883269a3e26b002b194e3d0ec9372bd112818cd487753",
+  sudoHash: "f843bff08d5d58141ac6f4a9cc41a1b7dde4cb09a55c237ebbde1048c3b0a7be",
 };
