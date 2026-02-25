@@ -1,0 +1,21 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  line-height: 1.5;
+  color: #222;
+  background: #f7f7f7;
+}
+
+.container {
+  max-width: 720px;
+  margin: 4rem auto;
+  padding: 0 1rem;
+}
+
+h1 {
+  margin: 0 0 0.5rem;
+}
