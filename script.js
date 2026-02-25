@@ -234,7 +234,7 @@ tree [path]`,
   }
 
   if (cmd === "whoami") return { text: user };
-  if (cmd === "about") return { text: "LazyKillerKing Terminal v3.1.1" };
+  if (cmd === "about") return { text: "LazyKillerKing Terminal v3.1.2" };
   if (cmd === "clear") {
     output.innerHTML = "";
     return { text: "" };
@@ -477,13 +477,7 @@ async function boot() {
   focusInput();
 
   const ok = await loadRootIndex(DEFAULT_ROOT);
-  if (ok) {
-    if (Object.keys(bundledFiles).length > 0) {
-      printLine(`Auto-mounted: ${DEFAULT_ROOT} (local bundle mode)`, "info");
-    } else {
-      printLine(`Auto-mounted: ${DEFAULT_ROOT}`, "info");
-    }
-  } else {
+  if (!ok) {
     printLine(`Could not auto-mount '${DEFAULT_ROOT}'.`, "error");
   }
 }
