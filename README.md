@@ -1,1 +1,1 @@
-# terminal.lazykillerking.github.io
+# terminal
