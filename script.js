@@ -173,6 +173,76 @@ function describeNodeType(path, node) {
   return "regular file";
 }
 
+function splitTargetPath(pathArg) {
+  const parts = resolvePath(pathArg);
+  if (parts.length === 0) return { error: `${pathArg || "/"}: invalid target` };
+  return {
+    parts,
+    parentParts: parts.slice(0, -1),
+    name: parts[parts.length - 1],
+    key: parts.join("/"),
+  };
+}
+
+function getDirOrNull(parts) {
+  const node = getNodeByPath(parts);
+  if (!node || node.type !== "dir") return null;
+  return node;
+}
+
+function removeFilePayloadRecursive(parts, node) {
+  if (!node) return;
+  if (node.type === "file") {
+    delete bundledFiles[parts.join("/")];
+    return;
+  }
+  Object.entries(node.children).forEach(([name, child]) => {
+    removeFilePayloadRecursive(parts.concat(name), child);
+  });
+}
+
+function cloneNodeDeep(node) {
+  if (node.type === "file") return { type: "file" };
+  const children = {};
+  Object.entries(node.children).forEach(([name, child]) => {
+    children[name] = cloneNodeDeep(child);
+  });
+  return { type: "dir", children };
+}
+
+function copyFilePayloadRecursive(srcParts, dstParts, node) {
+  if (node.type === "file") {
+    const srcKey = srcParts.join("/");
+    const dstKey = dstParts.join("/");
+    if (Object.prototype.hasOwnProperty.call(bundledFiles, srcKey)) {
+      bundledFiles[dstKey] = bundledFiles[srcKey];
+    } else {
+      bundledFiles[dstKey] = "";
+    }
+    return;
+  }
+  Object.entries(node.children).forEach(([name, child]) => {
+    copyFilePayloadRecursive(srcParts.concat(name), dstParts.concat(name), child);
+  });
+}
+
+async function readFileText(parts, displayPath) {
+  const key = parts.join("/");
+  if (Object.prototype.hasOwnProperty.call(bundledFiles, key)) {
+    return { ok: true, text: bundledFiles[key] ?? "" };
+  }
+
+  try {
+    const res = await fetch(buildFileUrl(parts), { cache: "no-store" });
+    if (!res.ok) return { ok: false, error: `${displayPath}: Unable to read file` };
+    const text = await res.text();
+    bundledFiles[key] = text;
+    return { ok: true, text };
+  } catch (_) {
+    return { ok: false, error: `${displayPath}: Unable to read file` };
+  }
+}
+
 // Split command input into command + args with whitespace normalization.
 function parseInput(raw) {
   const trimmed = raw.trim();
@@ -338,7 +408,7 @@ function registerCommands() {
     name: "about",
     description: "Show terminal version",
     async run() {
-      return { text: "LazyKillerKing Terminal v4.1.3" };
+      return { text: "LazyKillerKing Terminal v4.2.1" };
     },
   });
 
@@ -479,6 +549,299 @@ function registerCommands() {
       } catch (_) {
         return { text: `cat: ${target}: Unable to read file`, type: "error" };
       }
+    },
+  });
+
+  registerCommand({
+    name: "touch",
+    description: "Create empty file or update file timestamp",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "touch: missing file operand", type: "error" };
+
+      const target = splitTargetPath(args[0]);
+      if (target.error) return { text: `touch: ${target.error}`, type: "error" };
+      const parent = getDirOrNull(target.parentParts);
+      if (!parent) return { text: `touch: cannot touch '${args[0]}': No such file or directory`, type: "error" };
+
+      const existing = parent.children[target.name];
+      if (existing && existing.type === "dir") {
+        return { text: `touch: cannot touch '${args[0]}': Is a directory`, type: "error" };
+      }
+      if (!existing) parent.children[target.name] = { type: "file" };
+      if (!Object.prototype.hasOwnProperty.call(bundledFiles, target.key)) bundledFiles[target.key] = "";
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "mkdir",
+    description: "Create directory",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "mkdir: missing operand", type: "error" };
+
+      const target = splitTargetPath(args[0]);
+      if (target.error) return { text: `mkdir: ${target.error}`, type: "error" };
+      const parent = getDirOrNull(target.parentParts);
+      if (!parent) return { text: `mkdir: cannot create directory '${args[0]}': No such file or directory`, type: "error" };
+      if (parent.children[target.name]) {
+        return { text: `mkdir: cannot create directory '${args[0]}': File exists`, type: "error" };
+      }
+      parent.children[target.name] = { type: "dir", children: {} };
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "rm",
+    description: "Remove file (-r for directories)",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "rm: missing operand", type: "error" };
+
+      const recursive = args.includes("-r") || args.includes("-rf");
+      const targetArg = args.find((arg) => !arg.startsWith("-"));
+      if (!targetArg) return { text: "rm: missing operand", type: "error" };
+
+      const target = splitTargetPath(targetArg);
+      if (target.error) return { text: `rm: ${target.error}`, type: "error" };
+      const parent = getDirOrNull(target.parentParts);
+      if (!parent || !parent.children[target.name]) {
+        return { text: `rm: cannot remove '${targetArg}': No such file or directory`, type: "error" };
+      }
+
+      const node = parent.children[target.name];
+      if (node.type === "dir" && !recursive) {
+        return { text: `rm: cannot remove '${targetArg}': Is a directory`, type: "error" };
+      }
+
+      removeFilePayloadRecursive(target.parts, node);
+      delete parent.children[target.name];
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "rmdir",
+    description: "Remove empty directory",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "rmdir: missing operand", type: "error" };
+
+      const target = splitTargetPath(args[0]);
+      if (target.error) return { text: `rmdir: ${target.error}`, type: "error" };
+      const parent = getDirOrNull(target.parentParts);
+      if (!parent || !parent.children[target.name]) {
+        return { text: `rmdir: failed to remove '${args[0]}': No such file or directory`, type: "error" };
+      }
+      const node = parent.children[target.name];
+      if (node.type !== "dir") return { text: `rmdir: failed to remove '${args[0]}': Not a directory`, type: "error" };
+      if (Object.keys(node.children).length > 0) {
+        return { text: `rmdir: failed to remove '${args[0]}': Directory not empty`, type: "error" };
+      }
+      delete parent.children[target.name];
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "mv",
+    description: "Move/rename file or directory",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (args.length < 2) return { text: "mv: missing file operand", type: "error" };
+
+      const src = splitTargetPath(args[0]);
+      const dst = splitTargetPath(args[1]);
+      if (src.error) return { text: `mv: ${src.error}`, type: "error" };
+      if (dst.error) return { text: `mv: ${dst.error}`, type: "error" };
+
+      const srcParent = getDirOrNull(src.parentParts);
+      const dstParent = getDirOrNull(dst.parentParts);
+      if (!srcParent || !srcParent.children[src.name]) {
+        return { text: `mv: cannot stat '${args[0]}': No such file or directory`, type: "error" };
+      }
+      if (!dstParent) return { text: `mv: cannot move to '${args[1]}': No such file or directory`, type: "error" };
+      if (dstParent.children[dst.name]) return { text: `mv: cannot move to '${args[1]}': File exists`, type: "error" };
+
+      const node = srcParent.children[src.name];
+      dstParent.children[dst.name] = node;
+      delete srcParent.children[src.name];
+
+      if (node.type === "file") {
+        if (Object.prototype.hasOwnProperty.call(bundledFiles, src.key)) {
+          bundledFiles[dst.key] = bundledFiles[src.key];
+          delete bundledFiles[src.key];
+        } else {
+          const read = await readFileText(src.parts, args[0]);
+          if (read.ok) {
+            bundledFiles[dst.key] = read.text;
+            delete bundledFiles[src.key];
+          }
+        }
+      } else {
+        copyFilePayloadRecursive(src.parts, dst.parts, node);
+        removeFilePayloadRecursive(src.parts, node);
+      }
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "cp",
+    description: "Copy file (-r for directories)",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (args.length < 2) return { text: "cp: missing file operand", type: "error" };
+
+      const recursive = args.includes("-r") || args.includes("-R");
+      const plain = args.filter((arg) => !arg.startsWith("-"));
+      if (plain.length < 2) return { text: "cp: missing destination file operand", type: "error" };
+
+      const src = splitTargetPath(plain[0]);
+      const dst = splitTargetPath(plain[1]);
+      if (src.error) return { text: `cp: ${src.error}`, type: "error" };
+      if (dst.error) return { text: `cp: ${dst.error}`, type: "error" };
+
+      const srcParent = getDirOrNull(src.parentParts);
+      const dstParent = getDirOrNull(dst.parentParts);
+      if (!srcParent || !srcParent.children[src.name]) {
+        return { text: `cp: cannot stat '${plain[0]}': No such file or directory`, type: "error" };
+      }
+      if (!dstParent) return { text: `cp: cannot copy to '${plain[1]}': No such file or directory`, type: "error" };
+      if (dstParent.children[dst.name]) return { text: `cp: cannot copy to '${plain[1]}': File exists`, type: "error" };
+
+      const node = srcParent.children[src.name];
+      if (node.type === "dir" && !recursive) {
+        return { text: `cp: -r not specified; omitting directory '${plain[0]}'`, type: "error" };
+      }
+
+      dstParent.children[dst.name] = cloneNodeDeep(node);
+      copyFilePayloadRecursive(src.parts, dst.parts, node);
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "head",
+    description: "Print first lines of file",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "head: missing file operand", type: "error" };
+
+      let lineCount = 10;
+      let fileArg = args[0];
+      if ((args[0] === "-n" || args[0] === "--lines") && args[1] && args[2]) {
+        lineCount = Math.max(1, Number.parseInt(args[1], 10) || 10);
+        fileArg = args[2];
+      }
+
+      const target = splitTargetPath(fileArg);
+      if (target.error) return { text: `head: ${target.error}`, type: "error" };
+      const node = getNodeByPath(target.parts);
+      if (!node) return { text: `head: cannot open '${fileArg}': No such file or directory`, type: "error" };
+      if (node.type !== "file") return { text: `head: error reading '${fileArg}': Is a directory`, type: "error" };
+
+      const read = await readFileText(target.parts, fileArg);
+      if (!read.ok) return { text: `head: ${read.error}`, type: "error" };
+      return { text: read.text.split("\n").slice(0, lineCount).join("\n") };
+    },
+  });
+
+  registerCommand({
+    name: "tail",
+    description: "Print last lines of file",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "tail: missing file operand", type: "error" };
+
+      let lineCount = 10;
+      let fileArg = args[0];
+      if ((args[0] === "-n" || args[0] === "--lines") && args[1] && args[2]) {
+        lineCount = Math.max(1, Number.parseInt(args[1], 10) || 10);
+        fileArg = args[2];
+      }
+
+      const target = splitTargetPath(fileArg);
+      if (target.error) return { text: `tail: ${target.error}`, type: "error" };
+      const node = getNodeByPath(target.parts);
+      if (!node) return { text: `tail: cannot open '${fileArg}': No such file or directory`, type: "error" };
+      if (node.type !== "file") return { text: `tail: error reading '${fileArg}': Is a directory`, type: "error" };
+
+      const read = await readFileText(target.parts, fileArg);
+      if (!read.ok) return { text: `tail: ${read.error}`, type: "error" };
+      const lines = read.text.split("\n");
+      return { text: lines.slice(Math.max(0, lines.length - lineCount)).join("\n") };
+    },
+  });
+
+  registerCommand({
+    name: "less",
+    description: "View file content",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0]) return { text: "less: missing file operand", type: "error" };
+
+      const target = splitTargetPath(args[0]);
+      if (target.error) return { text: `less: ${target.error}`, type: "error" };
+      const node = getNodeByPath(target.parts);
+      if (!node) return { text: `less: cannot open '${args[0]}': No such file or directory`, type: "error" };
+      if (node.type !== "file") return { text: `less: ${args[0]}: Is a directory`, type: "error" };
+
+      const read = await readFileText(target.parts, args[0]);
+      if (!read.ok) return { text: `less: ${read.error}`, type: "error" };
+      return { text: `${read.text}\n(END)` };
+    },
+  });
+
+  registerCommand({
+    name: "grep",
+    description: "Search text in file",
+    async run(args) {
+      if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
+      if (!args[0] || !args[1]) return { text: "grep: usage: grep [-n] <pattern> <file...>", type: "error" };
+
+      const lineNumbers = args.includes("-n");
+      const plain = args.filter((arg) => arg !== "-n");
+      const pattern = plain[0];
+      const files = plain.slice(1);
+      if (!pattern || files.length === 0) return { text: "grep: usage: grep [-n] <pattern> <file...>", type: "error" };
+
+      const results = [];
+      for (const fileArg of files) {
+        const target = splitTargetPath(fileArg);
+        if (target.error) {
+          results.push(`grep: ${fileArg}: invalid path`);
+          continue;
+        }
+
+        const node = getNodeByPath(target.parts);
+        if (!node) {
+          results.push(`grep: ${fileArg}: No such file or directory`);
+          continue;
+        }
+        if (node.type !== "file") {
+          results.push(`grep: ${fileArg}: Is a directory`);
+          continue;
+        }
+
+        const read = await readFileText(target.parts, fileArg);
+        if (!read.ok) {
+          results.push(`grep: ${read.error}`);
+          continue;
+        }
+
+        const lines = read.text.split("\n");
+        lines.forEach((line, idx) => {
+          if (!line.includes(pattern)) return;
+          const prefix = files.length > 1 ? `${fileArg}:` : "";
+          const num = lineNumbers ? `${idx + 1}:` : "";
+          results.push(`${prefix}${num}${line}`);
+        });
+      }
+
+      return { text: results.join("\n") };
     },
   });
 
