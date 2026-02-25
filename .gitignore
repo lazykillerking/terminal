@@ -140,3 +140,6 @@ vite.config.ts.timestamp-*
 
 # Local engineering notes (do not publish)
 LOCAL_TERMINAL_REPORT.md
+
+# Local terminal secret (do not publish)
+terminal.secret.local.js
