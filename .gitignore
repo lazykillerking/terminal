@@ -137,3 +137,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Local engineering notes (do not publish)
+LOCAL_TERMINAL_REPORT.md

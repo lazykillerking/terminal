@@ -6,6 +6,7 @@ const inputLine = document.querySelector(".input-line");
 const cursor = document.getElementById("cursor");
 const cursorMeasure = document.getElementById("cursorMeasure");
 
+// Command history state for ArrowUp/ArrowDown navigation.
 const history = [];
 let historyIndex = 0;
 let draftInput = "";
@@ -13,10 +14,12 @@ let draftInput = "";
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
 
+// Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
   terminal_fs: "lkk-root",
 };
 
+// Used by help text and command-name suggestions.
 const KNOWN_COMMANDS = [
   "help",
   "whoami",
@@ -36,6 +39,7 @@ let rootIndex = null;
 let cwd = [];
 let bundledFiles = {};
 
+// Moves the fake block cursor so it tracks the typed text width.
 function syncCursorPosition() {
   const text = input.value.length ? input.value : " ";
   cursorMeasure.textContent = text;
@@ -55,6 +59,7 @@ function scrollOutputToBottom() {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
+// Prompt mirrors shell-like working directory display.
 function renderPrompt() {
   const path = cwd.length ? `~/${cwd.join("/")}` : "~";
   prompt.textContent = `${user}@terminal:${path}$`;
@@ -68,6 +73,7 @@ function printLine(text = "", type = "normal") {
   output.appendChild(div);
 }
 
+// Print executed command line with escaped content to avoid HTML injection.
 function printCommandLine(promptText, rawValue) {
   const div = document.createElement("div");
   div.className = "line line-command";
@@ -84,6 +90,7 @@ function escapeHtml(text) {
     .replaceAll("'", "&#39;");
 }
 
+// Split command input into command + args with whitespace normalization.
 function parseInput(raw) {
   const trimmed = raw.trim();
   if (!trimmed) return { cmd: "", args: [] };
@@ -91,6 +98,7 @@ function parseInput(raw) {
   return { cmd: parts[0], args: parts.slice(1) };
 }
 
+// Normalize paths like ./, ../ and empty segments.
 function normalizeParts(parts) {
   const normalized = [];
   for (const part of parts) {
@@ -104,6 +112,7 @@ function normalizeParts(parts) {
   return normalized;
 }
 
+// Resolve input path against cwd; supports ~ and / rooted forms.
 function resolvePath(pathArg = "") {
   if (!pathArg || pathArg === ".") return [...cwd];
   if (pathArg === "~") return [];
@@ -122,6 +131,7 @@ function resolvePath(pathArg = "") {
   return normalizeParts(base.concat(raw.split("/")));
 }
 
+// Traverse the in-memory index tree and return the node at path.
 function getNodeByPath(pathParts) {
   if (!rootIndex) return null;
   let node = rootIndex;
@@ -132,6 +142,7 @@ function getNodeByPath(pathParts) {
   return node || null;
 }
 
+// Stable sorted output to keep listings deterministic.
 function listDirectoryEntries(dirNode) {
   return Object.keys(dirNode.children)
     .sort((a, b) => a.localeCompare(b))
@@ -141,6 +152,7 @@ function listDirectoryEntries(dirNode) {
     }));
 }
 
+// Build ASCII tree output recursively.
 function buildTreeLines(node, name = ".", prefix = "", includeSelf = true, lines = []) {
   if (includeSelf) {
     lines.push(`${prefix}${name}`);
@@ -163,6 +175,7 @@ function buildTreeLines(node, name = ".", prefix = "", includeSelf = true, lines
   return lines;
 }
 
+// Suggest names by prefix first, then substring fallback.
 function suggestFromSet(word, options) {
   if (!word) return [];
   const lower = word.toLowerCase();
@@ -183,6 +196,9 @@ function buildFileUrl(pathParts) {
   return `${rootName}/${pathParts.join("/")}`;
 }
 
+// Load filesystem index:
+// 1) local JS bundle fallback (works on file://)
+// 2) hosted .index.json (works on http/https)
 async function loadRootIndex(targetRootName) {
   const bundle = window.TERMINAL_FS_BUNDLE;
   if (
@@ -214,6 +230,7 @@ async function loadRootIndex(targetRootName) {
   }
 }
 
+// Main command dispatcher. Returns `{ text, type }` for output rendering.
 async function runCommand(cmd, args) {
   if (cmd === "help") {
     return {
@@ -234,7 +251,7 @@ tree [path]`,
   }
 
   if (cmd === "whoami") return { text: user };
-  if (cmd === "about") return { text: "LazyKillerKing Terminal v3.1.2" };
+  if (cmd === "about") return { text: "LazyKillerKing Terminal v3.1.3" };
   if (cmd === "clear") {
     output.innerHTML = "";
     return { text: "" };
@@ -321,11 +338,13 @@ tree [path]`,
     if (!node) return { text: `cat: ${target}: No such file or directory`, type: "error" };
     if (node.type !== "file") return { text: `cat: ${target}: Is a directory`, type: "error" };
 
+    // Fast path for bundled content in local mode.
     const relativePath = parts.join("/");
     if (Object.prototype.hasOwnProperty.call(bundledFiles, relativePath)) {
       return { text: bundledFiles[relativePath] || "(empty file)" };
     }
 
+    // Fallback to live file fetch on hosted mode.
     try {
       const res = await fetch(buildFileUrl(parts), { cache: "no-store" });
       if (!res.ok) {
@@ -355,7 +374,10 @@ tree [path]`,
   return { text: `Command not found: ${cmd}${suggestionText}`, type: "error" };
 }
 
+// Executes one command line submit cycle:
+// capture history -> print command -> run -> print result.
 async function handleEnter() {
+  // Auto-follow output only if the user was already reading latest lines.
   const wasNearBottom =
     terminal.scrollHeight - (terminal.scrollTop + terminal.clientHeight) < 16;
 
@@ -388,6 +410,7 @@ async function handleEnter() {
   focusInput();
 }
 
+// Tab completion for command names and current directory path entries.
 async function tryAutocomplete() {
   const value = input.value.trim();
   const parts = value.split(/\s+/).filter(Boolean);
@@ -420,6 +443,7 @@ async function tryAutocomplete() {
   }
 }
 
+// Keyboard controls for submit, completion, and history navigation.
 input.addEventListener("keydown", async (e) => {
   if (e.key === "Enter") {
     e.preventDefault();
@@ -459,6 +483,7 @@ input.addEventListener("keydown", async (e) => {
   }
 });
 
+// Keep typing seamless even after external clicks or tab switches.
 window.addEventListener("focus", focusInput);
 window.addEventListener("resize", syncCursorPosition);
 document.addEventListener("pointerdown", (event) => {
@@ -471,6 +496,7 @@ document.addEventListener("visibilitychange", () => {
 });
 input.addEventListener("input", syncCursorPosition);
 
+// Boot sequence: render prompt, focus input, auto-mount default root.
 async function boot() {
   renderPrompt();
   syncCursorPosition();
