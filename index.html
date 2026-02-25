@@ -10,10 +10,13 @@
   <div id="terminal">
     <div id="output"></div>
     <div class="input-line">
-      <span class="prompt">lkk@terminal:~$</span>
+      <span class="prompt" id="prompt">lkk@terminal:~$</span>
       <input type="text" id="commandInput" autofocus />
+      <span id="cursor" aria-hidden="true"></span>
+      <span id="cursorMeasure" aria-hidden="true"></span>
     </div>
   </div>
+  <script src="terminal_fs.bundle.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

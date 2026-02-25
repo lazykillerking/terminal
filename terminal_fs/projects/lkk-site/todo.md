@@ -1,0 +1,3 @@
+- refine terminal colors
+- add command aliases
+- add session persistence

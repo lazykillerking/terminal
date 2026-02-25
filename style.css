@@ -1,39 +1,107 @@
-
 * {
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  background: #000;
-  color: #00ff88;
-  font-family: "Courier New", monospace;
-  height: 100vh;
-  padding: 20px;
+  background: #000000;
+  color: #d0d0d0;
+  font-family: "Ubuntu Mono", "DejaVu Sans Mono", "Consolas", monospace;
+  font-size: 18px;
+  line-height: 1.35;
 }
 
 #terminal {
-  max-width: 900px;
+  height: 100vh;
+  overflow-y: auto;
+  overflow-anchor: none;
+  padding: 10px 12px;
 }
 
-.prompt {
-  margin-right: 8px;
+#output {
+  white-space: pre-wrap;
+}
+
+.line {
+  margin-bottom: 2px;
+}
+
+.line-command {
+  color: #d0d0d0;
+}
+
+.line-prompt {
+  color: #73d216;
+}
+
+.line-error {
+  color: #ff5f5f;
+}
+
+.line-info {
+  color: #9aa0a6;
+}
+
+.line-success {
+  color: #73d216;
+}
+
+.line-suggestion {
+  color: #fce94f;
 }
 
 .input-line {
   display: flex;
+  align-items: baseline;
+  padding-top: 2px;
+  position: relative;
+}
+
+.prompt {
+  margin-right: 8px;
+  color: #73d216;
+  white-space: nowrap;
 }
 
 #commandInput {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
-  color: #00ff88;
+  color: #d0d0d0;
   outline: none;
-  flex: 1;
   font-family: inherit;
-  font-size: 1rem;
+  font-size: inherit;
+  line-height: inherit;
+  caret-color: transparent;
 }
 
-#output div {
-  margin-bottom: 5px;
+#cursor {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-55%);
+  width: 10px;
+  height: 1.1em;
+  left: 0;
+  background: #d0d0d0;
+  animation: blink 1s steps(1, end) infinite;
+  pointer-events: none;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+#cursorMeasure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  font: inherit;
 }

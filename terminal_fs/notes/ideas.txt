@@ -1,0 +1,4 @@
+Ideas:
+1) plugin architecture
+2) command pipelines
+3) vim mode

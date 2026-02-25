@@ -1,0 +1,40 @@
+{
+  "type": "dir",
+  "children": {
+    "etc": {
+      "type": "dir",
+      "children": {
+        "motd.txt": {
+          "type": "file"
+        }
+      }
+    },
+    "notes": {
+      "type": "dir",
+      "children": {
+        "ideas.txt": {
+          "type": "file"
+        }
+      }
+    },
+    "projects": {
+      "type": "dir",
+      "children": {
+        "lkk-site": {
+          "type": "dir",
+          "children": {
+            "index.html": {
+              "type": "file"
+            },
+            "todo.md": {
+              "type": "file"
+            }
+          }
+        }
+      }
+    },
+    "readme.txt": {
+      "type": "file"
+    }
+  }
+}
