@@ -33,6 +33,7 @@ let bundledFiles = {};
 let sudoSessionUntil = 0;
 let pendingSudo = null;
 let pendingPasswd = null;
+let promptOverride = null;
 
 // Moves the fake block cursor so it tracks the typed text width.
 function syncCursorPosition() {
@@ -57,8 +58,22 @@ function scrollOutputToBottom() {
 // Prompt mirrors shell-like working directory display.
 function renderPrompt() {
   const path = cwd.length ? `~/${cwd.join("/")}` : "~";
-  prompt.textContent = `${user}@terminal:${path}$`;
+  prompt.textContent = promptOverride || `${user}@terminal:${path}$`;
   syncCursorPosition();
+}
+
+function startSecretInput(label) {
+  promptOverride = label;
+  input.type = "password";
+  input.value = "";
+  renderPrompt();
+}
+
+function stopSecretInput() {
+  promptOverride = null;
+  input.type = "text";
+  input.value = "";
+  renderPrompt();
 }
 
 function printLine(text = "", type = "normal") {
@@ -323,7 +338,7 @@ function registerCommands() {
     name: "about",
     description: "Show terminal version",
     async run() {
-      return { text: "LazyKillerKing Terminal v4.1.2" };
+      return { text: "LazyKillerKing Terminal v4.1.3" };
     },
   });
 
@@ -558,11 +573,13 @@ function registerCommands() {
       }
       if (args[0] === "-s") {
         pendingSudo = { mode: "session" };
-        return { text: "Password (type and press Enter):", type: "info", suppressPrompt: true };
+        startSecretInput("Password:");
+        return { text: "" };
       }
 
       pendingSudo = { mode: "command", commandLine: args.join(" ") };
-      return { text: "Password (type and press Enter):", type: "info", suppressPrompt: true };
+      startSecretInput("Password:");
+      return { text: "" };
     },
   });
 
@@ -574,14 +591,17 @@ function registerCommands() {
         clearLocalSudoPassword();
         clearSudoSession();
         pendingPasswd = null;
+        stopSecretInput();
         return { text: "passwd: local override removed, using public hash", type: "success" };
       }
       if (!getConfiguredSudoHash()) {
         pendingPasswd = { step: "new", newPassword: "" };
-        return { text: "New password (type and press Enter):", type: "info", suppressPrompt: true };
+        startSecretInput("New password:");
+        return { text: "" };
       }
       pendingPasswd = { step: "current", newPassword: "" };
-      return { text: "Current password (type and press Enter):", type: "info", suppressPrompt: true };
+      startSecretInput("Current password:");
+      return { text: "" };
     },
   });
 }
@@ -611,7 +631,6 @@ async function handleEnter() {
   const { cmd, args } = parseInput(rawValue);
 
   if (pendingPasswd) {
-    printCommandLine(prompt.textContent, "[passwd input]");
     const entered = rawValue;
 
     if (pendingPasswd.step === "current") {
@@ -620,7 +639,7 @@ async function handleEnter() {
         printLine("passwd: current password incorrect", "error");
       } else {
         pendingPasswd.step = "new";
-        printLine("New password:", "info");
+        startSecretInput("New password:");
       }
     } else if (pendingPasswd.step === "new") {
       if (entered.length < 4) {
@@ -628,17 +647,20 @@ async function handleEnter() {
       } else {
         pendingPasswd.newPassword = entered;
         pendingPasswd.step = "confirm";
-        printLine("Retype new password:", "info");
+        startSecretInput("Retype new password:");
       }
     } else if (pendingPasswd.step === "confirm") {
       if (entered !== pendingPasswd.newPassword) {
         printLine("passwd: passwords do not match", "error");
+        pendingPasswd.step = "new";
+        startSecretInput("New password:");
       } else {
         await setLocalSudoPassword(entered);
         clearSudoSession();
+        stopSecretInput();
         printLine("passwd: sudo password updated (browser-local)", "success");
+        pendingPasswd = null;
       }
-      pendingPasswd = null;
     }
 
     if (wasNearBottom) scrollOutputToBottom();
@@ -649,19 +671,20 @@ async function handleEnter() {
   }
 
   if (pendingSudo) {
-    printCommandLine(prompt.textContent, "[sudo password]");
     const ok = await verifySudoPassword(rawValue);
 
     if (!ok) {
-      pendingSudo = null;
       printLine("sudo: incorrect password", "error");
+      startSecretInput("Password:");
     } else if (pendingSudo.mode === "session") {
       setSudoSession();
       pendingSudo = null;
+      stopSecretInput();
       printLine("sudo: session active (5 min)", "success");
     } else {
       const sub = parseInput(pendingSudo.commandLine);
       pendingSudo = null;
+      stopSecretInput();
       const result = await runCommand(sub.cmd, sub.args, { elevated: true });
       if (result && result.text) printLine(result.text, result.type || "normal");
     }
