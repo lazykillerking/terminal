@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.3";
+const TERMINAL_VERSION = "4.5.4";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -59,10 +59,11 @@ const BOOT_FOLLOWUP_LABELS = [
   "Finalizing security context",
 ];
 const MATRIX_FX_DURATION_MS = 2000;
+const PAGE_LOAD_FADE_MS = 400;
 const MATRIX_FX_MAX_OPACITY = 1;
 const MATRIX_FX_COLUMN_REVEAL_MS = 900;
 const MATRIX_FX_FONT_SIZE = 22;
-const MATRIX_FX_CHARS = "01ABCDEFGHIJKLMNOPQRSTUVWXYZ$#*+-";
+const MATRIX_FX_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ$#*+-";
 const BOOT_ASCII = [
   " _______                  _             _ ",
   "|__   __|                (_)           | |",
@@ -74,6 +75,17 @@ const BOOT_ASCII = [
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runTerminalPageLoadFade() {
+  if (!terminal) return;
+  terminal.style.opacity = "0";
+  
+  // Force a reflow to ensure the opacity: 0 state is applied
+  void terminal.offsetHeight;
+  
+  terminal.style.transition = `opacity ${PAGE_LOAD_FADE_MS}ms ease`;
+  terminal.style.opacity = "1";
 }
 
 function runUnlockGlitchOnce() {
@@ -1729,6 +1741,7 @@ input.addEventListener("input", syncCursorPosition);
 async function boot() {
   registerCommands();
   await runStartupMatrixFade();
+  runTerminalPageLoadFade();
   await renderBootSequence();
 
   const ok = await loadRootIndex(DEFAULT_ROOT);
@@ -1742,5 +1755,4 @@ async function boot() {
   syncCursorPosition();
   focusInput();
 }
-
 boot();
