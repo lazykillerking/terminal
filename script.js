@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.6.3";
+const TERMINAL_VERSION = "4.6.4";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -1187,8 +1187,17 @@ function registerCommands() {
     async run() {
       setTimeout(() => {
         window.close();
-        // If close fails (HTTP/HTTPS restriction), navigate to blank instead
+        // If close fails (HTTP/HTTPS restriction), try navigating to the browser home page
         if (!window.closed) {
+          // common home page URIs; browser will use whichever it supports
+          const homeCandidates = ['about:home', 'about:newtab', 'chrome://newtab'];
+          for (const uri of homeCandidates) {
+            try {
+              window.location = uri;
+              return;
+            } catch (_) {}
+          }
+          // all else fails, fall back to blank
           window.location = 'about:blank';
         }
       }, 500);
