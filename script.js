@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.7";
+const TERMINAL_VERSION = "4.5.8";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -883,6 +883,18 @@ function registerCommands() {
     async run() {
       output.innerHTML = "";
       return { text: "" };
+    },
+  });
+
+  registerCommand({
+    name: "history",
+    description: "Show command history",
+    async run(args) {
+      if (history.length === 0) {
+        return { text: "No command history", type: "info" };
+      }
+      const numbered = history.map((cmd, idx) => `${idx + 1}  ${cmd}`).join("\n");
+      return { text: numbered };
     },
   });
 
