@@ -5,6 +5,7 @@ const terminal = document.getElementById("terminal");
 const inputLine = document.querySelector(".input-line");
 const cursor = document.getElementById("cursor");
 const cursorMeasure = document.getElementById("cursorMeasure");
+inputLine.style.display = "none";
 
 // Command history state for ArrowUp/ArrowDown navigation.
 const history = [];
@@ -13,6 +14,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
+const TERMINAL_VERSION = "4.3.9";
 
 // Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
@@ -34,6 +36,36 @@ let sudoSessionUntil = 0;
 let pendingSudo = null;
 let pendingPasswd = null;
 let promptOverride = null;
+let bootInProgress = false;
+
+const BOOT_LINE_DELAY_MS = 36;
+const BOOT_CLEAR_PAUSE_MS = 120;
+const BOOT_STEPS = [
+  { label: "Initializing kernel subsystems", type: "success" },
+  { label: "Mounting terminal_fs volume", type: "success" },
+  { label: "Loading user profile", type: "success" },
+  { label: "Starting interactive session for lkk", type: "success" },
+];
+const BOOT_FOLLOWUP_LABELS = [
+  "Loading command registry",
+  "Hydrating virtual file index",
+  "Applying terminal profile",
+  "Starting I/O multiplexer",
+  "Calibrating cursor renderer",
+  "Finalizing security context",
+];
+const BOOT_ASCII = [
+  " _______                  _             _ ",
+  "|__   __|                (_)           | |",
+  "   | | ___ _ __ _ __ ___  _ _ __   __ _| |",
+  "   | |/ _ \\ '__| '_ ` _ \\| | '_ \\ / _` | |",
+  "   | |  __/ |  | | | | | | | | | | (_| | |",
+  "   |_|\\___|_|  |_| |_| |_|_|_| |_|\\__,_|_|",
+];
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Moves the fake block cursor so it tracks the typed text width.
 function syncCursorPosition() {
@@ -243,12 +275,167 @@ async function readFileText(parts, displayPath) {
   }
 }
 
-// Split command input into command + args with whitespace normalization.
-function parseInput(raw) {
-  const trimmed = raw.trim();
-  if (!trimmed) return { cmd: "", args: [] };
-  const parts = trimmed.split(/\s+/);
-  return { cmd: parts[0], args: parts.slice(1) };
+async function readRedirectInput(pathArg) {
+  if (!rootIndex) return { ok: false, error: "Filesystem unavailable." };
+  const parts = resolvePath(pathArg);
+  const node = getNodeByPath(parts);
+  if (!node) return { ok: false, error: `${pathArg}: No such file or directory` };
+  if (node.type !== "file") return { ok: false, error: `${pathArg}: Is a directory` };
+  const read = await readFileText(parts, pathArg);
+  if (!read.ok) return { ok: false, error: read.error };
+  return { ok: true, text: read.text ?? "" };
+}
+
+async function writeRedirectOutput(pathArg, text, append = false) {
+  if (!rootIndex) return { ok: false, error: "Filesystem unavailable." };
+
+  const target = splitTargetPath(pathArg);
+  if (target.error) return { ok: false, error: target.error };
+  const parent = getDirOrNull(target.parentParts);
+  if (!parent) return { ok: false, error: `${pathArg}: No such file or directory` };
+
+  const existing = parent.children[target.name];
+  if (existing && existing.type === "dir") return { ok: false, error: `${pathArg}: Is a directory` };
+  if (!existing) parent.children[target.name] = { type: "file" };
+
+  let nextText = text;
+  if (append) {
+    if (!Object.prototype.hasOwnProperty.call(bundledFiles, target.key)) {
+      bundledFiles[target.key] = "";
+    }
+    const read = await readFileText(target.parts, pathArg);
+    if (!read.ok) return { ok: false, error: read.error };
+    const current = read.text ?? "";
+    if (!current || !text) {
+      nextText = current + text;
+    } else {
+      nextText = `${current}${current.endsWith("\n") ? "" : "\n"}${text}`;
+    }
+  }
+
+  bundledFiles[target.key] = nextText;
+  return { ok: true };
+}
+
+function tokenizeCommandLine(raw) {
+  const tokens = [];
+  let current = "";
+  let quote = null;
+
+  const pushCurrent = () => {
+    if (current.length) {
+      tokens.push(current);
+      current = "";
+    }
+  };
+
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+
+    if (quote) {
+      if (ch === quote) {
+        quote = null;
+      } else {
+        current += ch;
+      }
+      continue;
+    }
+
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+
+    if (/\s/.test(ch)) {
+      pushCurrent();
+      continue;
+    }
+
+    if (ch === "|") {
+      pushCurrent();
+      tokens.push("|");
+      continue;
+    }
+
+    if (ch === "<") {
+      pushCurrent();
+      tokens.push("<");
+      continue;
+    }
+
+    if (ch === ">") {
+      pushCurrent();
+      if (raw[i + 1] === ">") {
+        tokens.push(">>");
+        i += 1;
+      } else {
+        tokens.push(">");
+      }
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (quote) {
+    return { ok: false, error: "syntax error: unmatched quote" };
+  }
+
+  pushCurrent();
+  return { ok: true, tokens };
+}
+
+function parseCommandLine(raw) {
+  const tokenized = tokenizeCommandLine(raw);
+  if (!tokenized.ok) return tokenized;
+  if (!tokenized.tokens.length) return { ok: true, segments: [] };
+
+  const segments = [];
+  let segment = { cmd: "", args: [], stdinPath: "", stdoutPath: "", append: false };
+  let expectingPathFor = "";
+
+  const finishSegment = () => {
+    if (expectingPathFor) return { ok: false, error: "syntax error near redirection" };
+    if (!segment.cmd) return { ok: false, error: "syntax error near pipe" };
+    segments.push(segment);
+    segment = { cmd: "", args: [], stdinPath: "", stdoutPath: "", append: false };
+    return { ok: true };
+  };
+
+  for (const token of tokenized.tokens) {
+    if (token === "|") {
+      const done = finishSegment();
+      if (!done.ok) return done;
+      continue;
+    }
+
+    if (token === "<" || token === ">" || token === ">>") {
+      if (expectingPathFor) return { ok: false, error: "syntax error near redirection" };
+      expectingPathFor = token;
+      continue;
+    }
+
+    if (expectingPathFor) {
+      if (expectingPathFor === "<") {
+        segment.stdinPath = token;
+      } else {
+        segment.stdoutPath = token;
+        segment.append = expectingPathFor === ">>";
+      }
+      expectingPathFor = "";
+      continue;
+    }
+
+    if (!segment.cmd) {
+      segment.cmd = token;
+    } else {
+      segment.args.push(token);
+    }
+  }
+
+  const done = finishSegment();
+  if (!done.ok) return done;
+  return { ok: true, segments };
 }
 
 // Normalize paths like ./, ../ and empty segments.
@@ -408,7 +595,7 @@ function registerCommands() {
     name: "about",
     description: "Show terminal version",
     async run() {
-      return { text: "LazyKillerKing Terminal v4.2.1" };
+      return { text: `LazyKillerKing Terminal v${TERMINAL_VERSION}` };
     },
   });
 
@@ -524,31 +711,39 @@ function registerCommands() {
 
   registerCommand({
     name: "cat",
-    description: "Print file contents",
-    async run(args) {
+    description: "Print file contents (or stdin)",
+    async run(args, ctx) {
       if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
-      if (!args[0]) return { text: "cat: missing file operand", type: "error" };
 
-      const target = args[0];
-      const parts = resolvePath(target);
-      const node = getNodeByPath(parts);
-
-      if (!node) return { text: `cat: ${target}: No such file or directory`, type: "error" };
-      if (node.type !== "file") return { text: `cat: ${target}: Is a directory`, type: "error" };
-
-      const relativePath = parts.join("/");
-      if (Object.prototype.hasOwnProperty.call(bundledFiles, relativePath)) {
-        return { text: bundledFiles[relativePath] || "(empty file)" };
+      if (!args.length) {
+        return { text: ctx.stdin || "" };
       }
 
-      try {
-        const res = await fetch(buildFileUrl(parts), { cache: "no-store" });
-        if (!res.ok) return { text: `cat: ${target}: Unable to read file`, type: "error" };
-        const text = await res.text();
-        return { text: text || "(empty file)" };
-      } catch (_) {
-        return { text: `cat: ${target}: Unable to read file`, type: "error" };
+      const chunks = [];
+      for (const target of args) {
+        const parts = resolvePath(target);
+        const node = getNodeByPath(parts);
+
+        if (!node) return { text: `cat: ${target}: No such file or directory`, type: "error" };
+        if (node.type !== "file") return { text: `cat: ${target}: Is a directory`, type: "error" };
+
+        const relativePath = parts.join("/");
+        if (Object.prototype.hasOwnProperty.call(bundledFiles, relativePath)) {
+          chunks.push(bundledFiles[relativePath] ?? "");
+          continue;
+        }
+
+        try {
+          const res = await fetch(buildFileUrl(parts), { cache: "no-store" });
+          if (!res.ok) return { text: `cat: ${target}: Unable to read file`, type: "error" };
+          const text = await res.text();
+          chunks.push(text);
+        } catch (_) {
+          return { text: `cat: ${target}: Unable to read file`, type: "error" };
+        }
       }
+
+      return { text: chunks.join("\n") };
     },
   });
 
@@ -797,18 +992,28 @@ function registerCommands() {
 
   registerCommand({
     name: "grep",
-    description: "Search text in file",
-    async run(args) {
+    description: "Search text in file or stdin",
+    async run(args, ctx) {
       if (!rootIndex) return { text: "Filesystem unavailable.", type: "error" };
-      if (!args[0] || !args[1]) return { text: "grep: usage: grep [-n] <pattern> <file...>", type: "error" };
+      if (!args[0]) return { text: "grep: usage: grep [-n] <pattern> [file...]", type: "error" };
 
       const lineNumbers = args.includes("-n");
       const plain = args.filter((arg) => arg !== "-n");
       const pattern = plain[0];
       const files = plain.slice(1);
-      if (!pattern || files.length === 0) return { text: "grep: usage: grep [-n] <pattern> <file...>", type: "error" };
+      if (!pattern) return { text: "grep: usage: grep [-n] <pattern> [file...]", type: "error" };
 
       const results = [];
+      if (files.length === 0) {
+        const source = String(ctx.stdin || "");
+        source.split("\n").forEach((line, idx) => {
+          if (!line.includes(pattern)) return;
+          const num = lineNumbers ? `${idx + 1}:` : "";
+          results.push(`${num}${line}`);
+        });
+        return { text: results.join("\n") };
+      }
+
       for (const fileArg of files) {
         const target = splitTargetPath(fileArg);
         if (target.error) {
@@ -970,7 +1175,7 @@ function registerCommands() {
 }
 
 // Main command dispatcher. Returns `{ text, type }` for output rendering.
-async function runCommand(cmd, args, context = { elevated: false }) {
+async function runCommand(cmd, args, context = { elevated: false, stdin: "" }) {
   const resolvedName = resolveCommandName(cmd);
   if (!resolvedName) {
     const suggestions = suggestFromSet(cmd, [...getCommandNames(), ...commandAliases.keys()]);
@@ -982,16 +1187,55 @@ async function runCommand(cmd, args, context = { elevated: false }) {
   return entry.run(args, context);
 }
 
+async function runCommandLine(raw, context = { elevated: false, stdin: "" }) {
+  const parsed = parseCommandLine(raw);
+  if (!parsed.ok) return { text: parsed.error, type: "error" };
+  if (!parsed.segments.length) return { text: "" };
+
+  let stdinText = context.stdin || "";
+  let lastOutput = "";
+  let lastType = "normal";
+
+  for (const segment of parsed.segments) {
+    if (segment.stdinPath) {
+      const redirectedIn = await readRedirectInput(segment.stdinPath);
+      if (!redirectedIn.ok) return { text: redirectedIn.error, type: "error" };
+      stdinText = redirectedIn.text;
+    }
+
+    const result = await runCommand(segment.cmd, segment.args, {
+      elevated: context.elevated,
+      stdin: stdinText,
+    });
+    if (result && result.type === "error") return result;
+
+    let stdoutText = result?.text ?? "";
+    lastType = result?.type || "normal";
+
+    if (segment.stdoutPath) {
+      const redirectedOut = await writeRedirectOutput(segment.stdoutPath, stdoutText, segment.append);
+      if (!redirectedOut.ok) return { text: redirectedOut.error, type: "error" };
+      stdoutText = "";
+    }
+
+    stdinText = stdoutText;
+    lastOutput = stdoutText;
+  }
+
+  return { text: lastOutput, type: lastType };
+}
+
 // Executes one command line submit cycle:
 // capture history -> print command -> run -> print result.
 async function handleEnter() {
+  if (bootInProgress) return;
+
   // Auto-follow output only if the user was already reading latest lines.
   const wasNearBottom =
     terminal.scrollHeight - (terminal.scrollTop + terminal.clientHeight) < 16;
 
   const rawValue = input.value;
   const value = rawValue.trim();
-  const { cmd, args } = parseInput(rawValue);
 
   if (pendingPasswd) {
     const entered = rawValue;
@@ -1045,10 +1289,10 @@ async function handleEnter() {
       stopSecretInput();
       printLine("sudo: session active (5 min)", "success");
     } else {
-      const sub = parseInput(pendingSudo.commandLine);
+      const commandLine = pendingSudo.commandLine;
       pendingSudo = null;
       stopSecretInput();
-      const result = await runCommand(sub.cmd, sub.args, { elevated: true });
+      const result = await runCommandLine(commandLine, { elevated: true, stdin: "" });
       if (result && result.text) printLine(result.text, result.type || "normal");
     }
 
@@ -1067,7 +1311,7 @@ async function handleEnter() {
 
   if (value) {
     try {
-      const result = await runCommand(cmd, args, { elevated: false });
+      const result = await runCommandLine(rawValue, { elevated: false, stdin: "" });
       if (result && result.text) {
         printLine(result.text, result.type || "normal");
       }
@@ -1082,6 +1326,57 @@ async function handleEnter() {
   input.value = "";
   syncCursorPosition();
   focusInput();
+}
+
+function setPromptVisible(visible) {
+  inputLine.style.display = visible ? "flex" : "none";
+}
+
+function formatBootStatus(label, ok = true) {
+  const tag = ok ? " OK " : "FAIL";
+  return `[${tag}] ${label}...`;
+}
+
+function getBootFillLineCount() {
+  const style = getComputedStyle(document.body);
+  const lineHeight = parseFloat(style.lineHeight) || 24;
+  return Math.max(BOOT_STEPS.length, Math.ceil(terminal.clientHeight / lineHeight) + 2);
+}
+
+function getBootStatusLineByIndex(index) {
+  if (index < BOOT_STEPS.length) {
+    const step = BOOT_STEPS[index];
+    return { text: formatBootStatus(step.label), type: step.type };
+  }
+  const label = BOOT_FOLLOWUP_LABELS[(index - BOOT_STEPS.length) % BOOT_FOLLOWUP_LABELS.length];
+  return { text: formatBootStatus(label), type: "success" };
+}
+
+async function renderBootSequence() {
+  bootInProgress = true;
+  setPromptVisible(false);
+
+  printLine(`terminal/${TERMINAL_VERSION} boot manager`, "info");
+  printLine("");
+  scrollOutputToBottom();
+
+  const bootLines = getBootFillLineCount();
+  for (let i = 0; i < bootLines; i += 1) {
+    const line = getBootStatusLineByIndex(i);
+    printLine(line.text, line.type);
+    scrollOutputToBottom();
+    await sleep(BOOT_LINE_DELAY_MS);
+  }
+
+  await sleep(BOOT_CLEAR_PAUSE_MS);
+  output.innerHTML = "";
+
+  BOOT_ASCII.forEach((line) => printLine(line, "info"));
+  printLine("");
+  printLine(`Welcome to Terminal v${TERMINAL_VERSION}`, "success");
+  printLine(`Session ready for ${user}. Type 'help' to begin.`, "info");
+  printLine("");
+  scrollOutputToBottom();
 }
 
 // Tab completion for command names and current directory path entries.
@@ -1170,17 +1465,21 @@ document.addEventListener("visibilitychange", () => {
 });
 input.addEventListener("input", syncCursorPosition);
 
-// Boot sequence: render prompt, focus input, auto-mount default root.
+// Boot sequence: show startup banner, auto-mount root, then expose prompt.
 async function boot() {
   registerCommands();
-  renderPrompt();
-  syncCursorPosition();
-  focusInput();
+  await renderBootSequence();
 
   const ok = await loadRootIndex(DEFAULT_ROOT);
   if (!ok) {
     printLine(`Could not auto-mount '${DEFAULT_ROOT}'.`, "error");
   }
+
+  bootInProgress = false;
+  setPromptVisible(true);
+  renderPrompt();
+  syncCursorPosition();
+  focusInput();
 }
 
 boot();
