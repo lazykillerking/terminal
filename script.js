@@ -1279,8 +1279,10 @@ function registerCommands() {
           entries: [{ label: name, kind: isLikelyExecutable(name) ? "executable" : "file" }],
         };
       }
-      // if directory, attempt to augment listing from server
-      await augmentDirectoryFromServer(parts);
+      // if directory, attempt to augment listing from server (skip on file:// protocol)
+      if (window.location.protocol !== "file:") {
+        await augmentDirectoryFromServer(parts);
+      }
 
       const entries = listDirectoryEntries(node).filter((entry) => showAll || !entry.name.startsWith("."));
       const printable = entries.map((entry) => {
@@ -1726,9 +1728,11 @@ function registerCommands() {
       if (!node) return { text: `tree: ${target}: No such file or directory`, type: "error" };
       if (node.type !== "dir") return { text: `tree: ${target}: Not a directory`, type: "error" };
 
-      // augment directories recursively so server files are included
+      // augment directories recursively so server files are included (skip on file:// protocol)
       async function walkAndAugment(pathParts, dirNode) {
-        await augmentDirectoryFromServer(pathParts);
+        if (window.location.protocol !== "file:") {
+          await augmentDirectoryFromServer(pathParts);
+        }
         for (const name of Object.keys(dirNode.children)) {
           const child = dirNode.children[name];
           if (child.type === "dir") {
@@ -1737,9 +1741,6 @@ function registerCommands() {
         }
       }
       await walkAndAugment(parts, node);
-
-      // reload base index (merge overlay) so newly generated files show up
-      await refreshIndex();
 
       const rootLabel = target === "." ? "." : parts[parts.length - 1] || "/";
       const lines = buildTreeLines(node, rootLabel);
