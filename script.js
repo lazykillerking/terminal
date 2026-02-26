@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.2";
+const TERMINAL_VERSION = "4.5.3";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -39,6 +39,8 @@ let pendingPasswd = null;
 let promptOverride = null;
 let bootInProgress = false;
 let unlockGlitchPlayed = false;
+let soundEnabled = false;
+let keyAudioContext = null;
 
 const BOOT_LINE_DELAY_MS = 36;
 const BOOT_CLEAR_PAUSE_MS = 120;
@@ -85,6 +87,53 @@ function runUnlockGlitchOnce() {
     terminal.classList.remove("unlock-glitch");
   }, 650);
   return true;
+}
+
+function getKeyAudioContext() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!keyAudioContext) keyAudioContext = new AudioCtx();
+  return keyAudioContext;
+}
+
+function shouldPlayKeySound(event) {
+  if (!soundEnabled) return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  const silentKeys = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
+  return !silentKeys.has(event.key);
+}
+
+function playKeySound(event) {
+  if (!shouldPlayKeySound(event)) return;
+
+  const ctx = getKeyAudioContext();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    ctx.resume().catch(() => {});
+  }
+
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  const filter = ctx.createBiquadFilter();
+
+  const isCharacter = event.key.length === 1;
+  osc.type = "square";
+  osc.frequency.setValueAtTime(isCharacter ? 165 : 125, now);
+  filter.type = "bandpass";
+  filter.frequency.setValueAtTime(isCharacter ? 1950 : 1400, now);
+  filter.Q.setValueAtTime(1.2, now);
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.02, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.035);
+
+  osc.connect(filter);
+  filter.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(now);
+  osc.stop(now + 0.04);
 }
 
 function runStartupMatrixFade() {
@@ -757,6 +806,26 @@ function registerCommands() {
     description: "Show terminal version",
     async run() {
       return { text: `LazyKillerKing Terminal v${TERMINAL_VERSION}` };
+    },
+  });
+
+  registerCommand({
+    name: "sound",
+    description: "Toggle key sound (use: sound on|off)",
+    async run(args) {
+      const value = (args[0] || "").toLowerCase();
+      if (!value) {
+        return { text: `sound: ${soundEnabled ? "on" : "off"} (usage: sound <on|off>)`, type: "info" };
+      }
+      if (value === "on") {
+        soundEnabled = true;
+        return { text: "sound: on", type: "success" };
+      }
+      if (value === "off") {
+        soundEnabled = false;
+        return { text: "sound: off", type: "info" };
+      }
+      return { text: "sound: usage: sound <on|off>", type: "error" };
     },
   });
 
@@ -1599,6 +1668,8 @@ async function tryAutocomplete() {
 
 // Keyboard controls for submit, completion, and history navigation.
 input.addEventListener("keydown", async (e) => {
+  playKeySound(e);
+
   if (e.key === "Enter") {
     e.preventDefault();
     await handleEnter();
