@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.4.5";
+const TERMINAL_VERSION = "4.4.6";
 
 // Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
@@ -87,7 +87,7 @@ function runStartupMatrixFade() {
   let speeds = [];
 
   function resizeCanvas() {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     width = window.innerWidth;
     height = window.innerHeight;
     matrixFx.width = Math.floor(width * dpr);
@@ -104,8 +104,14 @@ function runStartupMatrixFade() {
   const fadeStartAt = MATRIX_FX_DURATION_MS * 0.55;
 
   return new Promise((resolve) => {
+    let finished = false;
+    let hardStopTimer = 0;
+
     function finish() {
+      if (finished) return;
+      finished = true;
       cancelAnimationFrame(rafId);
+      clearTimeout(hardStopTimer);
       matrixFx.style.opacity = "0";
       ctx.clearRect(0, 0, width, height);
       window.removeEventListener("resize", resizeCanvas);
@@ -147,6 +153,8 @@ function runStartupMatrixFade() {
 
     window.addEventListener("resize", resizeCanvas);
     rafId = requestAnimationFrame(frame);
+    // Live environments can throttle RAF heavily; ensure boot never stalls waiting.
+    hardStopTimer = window.setTimeout(finish, MATRIX_FX_DURATION_MS + 250);
   });
 }
 
