@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.4";
+const TERMINAL_VERSION = "4.5.5";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -235,13 +235,21 @@ function runStartupMatrixFade() {
 
 // Moves the fake block cursor so it tracks the typed text width.
 function syncCursorPosition() {
-  const text = input.value.length ? input.value : " ";
-  cursorMeasure.textContent = text;
-  const measuredWidth = cursorMeasure.offsetWidth + 1;
+  const cursorPos = input.selectionStart;
   const inputStart = input.offsetLeft;
-  const maxLeft = inputStart + input.clientWidth - cursor.offsetWidth;
-  const left = Math.min(inputStart + measuredWidth, Math.max(inputStart, maxLeft));
-  cursor.style.left = `${left}px`;
+  
+  if (cursorPos === 0) {
+    // Cursor at the start of input
+    cursor.style.left = `${inputStart}px`;
+  } else {
+    // Cursor somewhere in the text
+    const textBeforeCursor = input.value.substring(0, cursorPos);
+    cursorMeasure.textContent = textBeforeCursor;
+    const measuredWidth = cursorMeasure.offsetWidth;
+    const maxLeft = inputStart + input.clientWidth - cursor.offsetWidth;
+    const left = Math.min(inputStart + measuredWidth, Math.max(inputStart, maxLeft));
+    cursor.style.left = `${left}px`;
+  }
 }
 
 function focusInput() {
@@ -1655,6 +1663,8 @@ async function tryAutocomplete() {
     const matches = suggestFromSet(cmd, [...getCommandNames(), ...commandAliases.keys()]);
     if (matches.length === 1) {
       input.value = `${matches[0]} `;
+      input.setSelectionRange(input.value.length, input.value.length);
+      syncCursorPosition();
     } else if (matches.length > 1) {
       printLine(matches.join("   "), "suggestion");
     }
@@ -1673,6 +1683,8 @@ async function tryAutocomplete() {
     const root = last.includes("/") ? `${last.split("/").slice(0, -1).join("/")}/` : "";
     parts[parts.length - 1] = `${root}${matches[0]}`;
     input.value = `${parts.join(" ")} `;
+    input.setSelectionRange(input.value.length, input.value.length);
+    syncCursorPosition();
   } else if (matches.length > 1) {
     printLine(matches.join("   "), "suggestion");
   }
@@ -1723,6 +1735,13 @@ input.addEventListener("keydown", async (e) => {
 // Keep typing seamless even after external clicks or tab switches.
 window.addEventListener("focus", focusInput);
 window.addEventListener("resize", syncCursorPosition);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    // Defer to allow browser to update selectionStart
+    setTimeout(syncCursorPosition, 0);
+  }
+});
+input.addEventListener("click", syncCursorPosition);
 document.addEventListener("pointerdown", (event) => {
   if (event.target === input) return;
 
