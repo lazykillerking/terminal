@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.8";
+const TERMINAL_VERSION = "4.5.9";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -41,6 +41,9 @@ let bootInProgress = false;
 let unlockGlitchPlayed = false;
 let soundEnabled = false;
 let keyAudioContext = null;
+
+const OVERLAY_FS_KEY = "terminal.overlay.fs";
+const OVERLAY_CACHE_KEY = "terminal.overlay.cache";
 
 const BOOT_LINE_DELAY_MS = 36;
 const BOOT_CLEAR_PAUSE_MS = 120;
@@ -75,6 +78,45 @@ const BOOT_ASCII = [
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function saveOverlayFS() {
+  try {
+    const state = {
+      rootName,
+      rootIndex,
+      bundledFiles,
+      timestamp: Date.now(),
+    };
+    localStorage.setItem(OVERLAY_FS_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error("Failed to save overlay filesystem:", e);
+  }
+}
+
+function loadOverlayFS() {
+  try {
+    const stored = localStorage.getItem(OVERLAY_FS_KEY);
+    if (stored) {
+      const state = JSON.parse(stored);
+      return {
+        rootName: state.rootName,
+        rootIndex: state.rootIndex,
+        bundledFiles: state.bundledFiles,
+      };
+    }
+  } catch (e) {
+    console.error("Failed to load overlay filesystem:", e);
+  }
+  return null;
+}
+
+function clearOverlayFS() {
+  try {
+    localStorage.removeItem(OVERLAY_FS_KEY);
+  } catch (e) {
+    console.error("Failed to clear overlay filesystem:", e);
+  }
 }
 
 function runTerminalPageLoadFade() {
@@ -413,14 +455,101 @@ function clearLocalSudoPassword() {
   localStorage.removeItem(LOCAL_SUDO_HASH_KEY);
 }
 
-function describeNodeType(path, node) {
+async function describeNodeType(path, node) {
   if (!node) return "cannot open";
   if (node.type === "dir") return "directory";
+  
   const ext = path.includes(".") ? path.split(".").pop().toLowerCase() : "";
-  if (["txt", "md", "log"].includes(ext)) return "ASCII text";
-  if (["html", "htm"].includes(ext)) return "HTML document";
-  if (["js"].includes(ext)) return "JavaScript source";
+  
+  // Get file content to check magic bytes
+  let content = null;
+  try {
+    if (node.type === "file") {
+      const parts = resolvePath(path);
+      const read = await readFileText(parts, path);
+      if (read.ok) {
+        content = read.text;
+      }
+    }
+  } catch (e) {
+    // Continue with extension-based detection
+  }
+  
+  // Magic byte detection (convert to hex for comparison)
+  if (content !== null && content.length > 0) {
+    const bytes = new TextEncoder().encode(content.substring(0, 8));
+    
+    // PNG: 89 50 4E 47
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+      return "PNG image data";
+    }
+    
+    // ZIP: 50 4B 03 04 or 50 4B 05 06
+    if (bytes[0] === 0x50 && bytes[1] === 0x4B && (bytes[2] === 0x03 || bytes[2] === 0x05)) {
+      return "Zip archive data";
+    }
+    
+    // GZIP: 1F 8B
+    if (bytes[0] === 0x1F && bytes[1] === 0x8B) {
+      return "gzip compressed data";
+    }
+    
+    // TAR: check for "ustar" at offset 257
+    if (content.length > 265 && content.substring(257, 262) === "ustar") {
+      return "tar archive";
+    }
+    
+    // ELF: 7F 45 4C 46
+    if (bytes[0] === 0x7F && bytes[1] === 0x45 && bytes[2] === 0x4C && bytes[3] === 0x46) {
+      return "ELF executable";
+    }
+    
+    // JPEG: FF D8 FF
+    if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+      return "JPEG image data";
+    }
+    
+    // GIF: 47 49 46
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+      return "GIF image data";
+    }
+    
+    // PDF: 25 50 44 46 (%)
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+      return "PDF document";
+    }
+    
+    // Check if content is ASCII/UTF-8 readable
+    const isASCII = /^[\x00-\x7F]*$/.test(content);
+    const isUTF8 = /^[\x00-\xFF]*$/.test(content);
+    const isPrintable = /^[\x20-\x7E\n\r\t]*$/.test(content.substring(0, 200));
+  }
+  
+  // Extension-based detection
+  if (["txt", "md", "log", "csv", "cfg", "conf", "config"].includes(ext)) return "ASCII text";
+  if (["html", "htm", "xml", "svg"].includes(ext)) return "HTML/XML document";
+  if (["js", "ts", "jsx", "tsx"].includes(ext)) return "JavaScript/TypeScript source";
   if (["json"].includes(ext)) return "JSON data";
+  if (["css"].includes(ext)) return "CSS stylesheet";
+  if (["py", "py3"].includes(ext)) return "Python script";
+  if (["sh", "bash"].includes(ext)) return "bash script";
+  if (["c", "cpp", "cc", "h"].includes(ext)) return "C/C++ source";
+  if (["java"].includes(ext)) return "Java source";
+  if (["rb"].includes(ext)) return "Ruby script";
+  if (["go"].includes(ext)) return "Go source";
+  if (["rs"].includes(ext)) return "Rust source";
+  if (["zip", "rar", "7z"].includes(ext)) return "compressed archive";
+  if (["tar", "tar.gz", "tgz"].includes(ext)) return "tar archive";
+  if (["gz", "gzip"].includes(ext)) return "gzip compressed";
+  if (["png"].includes(ext)) return "PNG image";
+  if (["jpg", "jpeg"].includes(ext)) return "JPEG image";
+  if (["gif"].includes(ext)) return "GIF image";
+  if (["bmp"].includes(ext)) return "BMP image";
+  if (["svg"].includes(ext)) return "SVG image";
+  if (["pdf"].includes(ext)) return "PDF document";
+  if (["mp3", "wav", "flac", "aac"].includes(ext)) return "audio file";
+  if (["mp4", "avi", "mkv", "mov", "webm"].includes(ext)) return "video file";
+  
   return "regular file";
 }
 
@@ -533,6 +662,7 @@ async function writeRedirectOutput(pathArg, text, append = false) {
   }
 
   bundledFiles[target.key] = nextText;
+  saveOverlayFS();
   return { ok: true };
 }
 
@@ -768,6 +898,18 @@ function buildFileUrl(pathParts) {
 // 1) local JS bundle fallback (works on file://)
 // 2) hosted .index.json (works on http/https)
 async function loadRootIndex(targetRootName) {
+  // Check for overlay first
+  const overlay = loadOverlayFS();
+  if (overlay && overlay.rootName === targetRootName) {
+    rootName = overlay.rootName;
+    rootIndex = overlay.rootIndex;
+    bundledFiles = overlay.bundledFiles;
+    cwd = [];
+    renderPrompt();
+    return true;
+  }
+
+  // Fall back to base filesystem
   const bundle = window.TERMINAL_FS_BUNDLE;
   if (
     bundle &&
@@ -958,6 +1100,29 @@ function registerCommands() {
   });
 
   registerCommand({
+    name: "reset",
+    description: "Reset filesystem to initial state",
+    async run() {
+      clearOverlayFS();
+      const ok = await loadRootIndex(DEFAULT_ROOT);
+      if (!ok) {
+        return { text: "reset: failed to reload filesystem", type: "error" };
+      }
+      
+      // Clear output and show welcome screen
+      output.innerHTML = "";
+      BOOT_ASCII.forEach((line) => printLine(line, "info"));
+      printLine("");
+      printLine(`Welcome to Terminal v${TERMINAL_VERSION}`, "success");
+      printLine(`Session ready. Type 'help' to begin.`, "info");
+      printLine("");
+      scrollOutputToBottom();
+      
+      return { text: "" };
+    },
+  });
+
+  registerCommand({
     name: "ls",
     description: "List directory contents",
     async run(args) {
@@ -1077,6 +1242,7 @@ function registerCommands() {
       }
       if (!existing) parent.children[target.name] = { type: "file" };
       if (!Object.prototype.hasOwnProperty.call(bundledFiles, target.key)) bundledFiles[target.key] = "";
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1096,6 +1262,7 @@ function registerCommands() {
         return { text: `mkdir: cannot create directory '${args[0]}': File exists`, type: "error" };
       }
       parent.children[target.name] = { type: "dir", children: {} };
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1125,6 +1292,7 @@ function registerCommands() {
 
       removeFilePayloadRecursive(target.parts, node);
       delete parent.children[target.name];
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1148,6 +1316,7 @@ function registerCommands() {
         return { text: `rmdir: failed to remove '${args[0]}': Directory not empty`, type: "error" };
       }
       delete parent.children[target.name];
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1191,6 +1360,7 @@ function registerCommands() {
         copyFilePayloadRecursive(src.parts, dst.parts, node);
         removeFilePayloadRecursive(src.parts, node);
       }
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1226,6 +1396,7 @@ function registerCommands() {
 
       dstParent.children[dst.name] = cloneNodeDeep(node);
       copyFilePayloadRecursive(src.parts, dst.parts, node);
+      saveOverlayFS();
       return { text: "" };
     },
   });
@@ -1391,7 +1562,8 @@ function registerCommands() {
       const parts = resolvePath(target);
       const node = getNodeByPath(parts);
       if (!node) return { text: `file: cannot open '${target}'`, type: "error" };
-      return { text: `${target}: ${describeNodeType(target, node)}` };
+      const desc = await describeNodeType(target, node);
+      return { text: `${target}: ${desc}` };
     },
   });
 
