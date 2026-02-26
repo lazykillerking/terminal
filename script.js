@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.9";
+const TERMINAL_VERSION = "4.6.1";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -623,10 +623,104 @@ async function readFileText(parts, displayPath) {
   }
 }
 
+// Helper to probe server for a file and add to index if found
+async function ensureFileNode(parts) {
+  let node = getNodeByPath(parts);
+  if (node) return node;
+  // Skip server probing for file:// protocol - it won't work
+  if (window.location.protocol === "file:") return null;
+  
+  // attempt HEAD request to check existence (only for http/https)
+  try {
+    const url = buildFileUrl(parts);
+    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (res.ok) {
+      // create missing directories
+      let parent = rootIndex;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (!parent.children[p]) {
+          parent.children[p] = { type: "dir", children: {} };
+        }
+        parent = parent.children[p];
+        if (parent.type !== "dir") return null;
+      }
+      const name = parts[parts.length - 1];
+      parent.children[name] = { type: "file" };
+      return parent.children[name];
+    }
+  } catch (_) {}
+  return null;
+}
+
+// similar helper for directories
+async function ensureDirNode(parts) {
+  let node = getNodeByPath(parts);
+  if (node) return node;
+  // Skip server probing for file:// protocol - it won't work
+  if (window.location.protocol === "file:") return null;
+  
+  try {
+    const url = buildFileUrl(parts) + "/";
+    const res = await fetch(url, { method: "HEAD", cache: "no-store" });
+    if (res.ok) {
+      // create missing dir path
+      let parent = rootIndex;
+      for (let i = 0; i < parts.length - 1; i++) {
+        const p = parts[i];
+        if (!parent.children[p]) {
+          parent.children[p] = { type: "dir", children: {} };
+        }
+        parent = parent.children[p];
+        if (parent.type !== "dir") return null;
+      }
+      const name = parts[parts.length - 1];
+      parent.children[name] = { type: "dir", children: {} };
+      return parent.children[name];
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Augment a directory node by fetching server directory listing (if available)
+async function augmentDirectoryFromServer(parts) {
+  const node = getNodeByPath(parts);
+  if (!node || node.type !== "dir" || node._augmented) return;
+  
+  // Skip for file:// protocol - directory listing won't work
+  if (window.location.protocol === "file:") {
+    node._augmented = true;
+    return;
+  }
+  
+  const url = buildFileUrl(parts) + "/";
+  try {
+    const res = await fetch(url, { cache: "no-store" });
+    if (res.ok && res.headers.get("content-type")?.includes("text/html")) {
+      const html = await res.text();
+      const regex = /<a\s+href="([^"]+)"/g;
+      let m;
+      while ((m = regex.exec(html)) !== null) {
+        let name = m[1];
+        if (name === "../" || name === "/") continue;
+        if (name.endsWith("/")) name = name.slice(0, -1);
+        if (!node.children[name]) {
+          node.children[name] = { type: "file" };
+        }
+      }
+    }
+  } catch (_) {}
+  node._augmented = true;
+}
+
 async function readRedirectInput(pathArg) {
   if (!rootIndex) return { ok: false, error: "Filesystem unavailable." };
   const parts = resolvePath(pathArg);
-  const node = getNodeByPath(parts);
+  let node = getNodeByPath(parts);
+  if (!node) {
+    node = await ensureFileNode(parts);
+    if (node && !rootIndex) rootIndex = { type: 'dir', children: {} };
+  }
   if (!node) return { ok: false, error: `${pathArg}: No such file or directory` };
   if (node.type !== "file") return { ok: false, error: `${pathArg}: Is a directory` };
   const read = await readFileText(parts, pathArg);
@@ -883,9 +977,10 @@ function suggestFromSet(word, options) {
   return includes.slice(0, 6);
 }
 
-function suggestPathNames(baseParts) {
+async function suggestPathNames(baseParts) {
   const node = getNodeByPath(baseParts);
   if (!node || node.type !== "dir") return [];
+  await augmentDirectoryFromServer(baseParts);
   return listDirectoryEntries(node).map((e) => e.name);
 }
 
@@ -894,50 +989,88 @@ function buildFileUrl(pathParts) {
   return `${rootName}/${pathParts.join("/")}`;
 }
 
+// merge overlay index into the base index, preferring overlay entries when conflicts arise
+function mergeIndex(baseNode, overlayNode) {
+  for (const name of Object.keys(overlayNode.children || {})) {
+    const overChild = overlayNode.children[name];
+    const baseChild = baseNode.children[name];
+    if (!baseChild) {
+      // new node added by overlay
+      baseNode.children[name] = overChild;
+    } else if (overChild.type === "dir" && baseChild.type === "dir") {
+      // both directories: recurse
+      mergeIndex(baseChild, overChild);
+    } else {
+      // overlay replaces base (file or differing type)
+      baseNode.children[name] = overChild;
+    }
+  }
+}
+
+// refresh the current root index by reloading base data and merging the overlay
+// preserves the existing cwd so commands don't get kicked to '/'.
+async function refreshIndex() {
+  if (!rootName) return false;
+  const oldCwd = cwd.slice();
+  const ok = await loadRootIndex(rootName);
+  cwd = oldCwd;
+  renderPrompt();
+  return ok;
+}
+
 // Load filesystem index:
-// 1) local JS bundle fallback (works on file://)
-// 2) hosted .index.json (works on http/https)
+// 1) try hosted .index.json first (file:// or http)
+// 2) fall back to embedded bundle
+// If an overlay exists for the root, merge its changes on top of
+// whatever base index we loaded so that new files are visible.
 async function loadRootIndex(targetRootName) {
-  // Check for overlay first
-  const overlay = loadOverlayFS();
-  if (overlay && overlay.rootName === targetRootName) {
-    rootName = overlay.rootName;
-    rootIndex = overlay.rootIndex;
-    bundledFiles = overlay.bundledFiles;
-    cwd = [];
-    renderPrompt();
-    return true;
+  // load base index from server or bundle
+  let baseIndex = null;
+  let baseBundledFiles = {};
+
+  const protocol = window.location.protocol;
+  if (protocol === "file:") {
+    try {
+      const res = await fetch(`${targetRootName}/.index.json`, { cache: "no-store" });
+      if (res.ok) {
+        baseIndex = await res.json();
+        baseBundledFiles = {};
+      }
+    } catch (_) {
+      // ignore and try bundle next
+    }
   }
 
-  // Fall back to base filesystem
-  const bundle = window.TERMINAL_FS_BUNDLE;
-  if (
-    bundle &&
-    bundle.rootName === targetRootName &&
-    bundle.index &&
-    typeof bundle.files === "object"
-  ) {
-    rootName = targetRootName;
-    rootIndex = bundle.index;
-    bundledFiles = bundle.files;
-    cwd = [];
-    renderPrompt();
-    return true;
+  if (!baseIndex) {
+    const bundle = window.TERMINAL_FS_BUNDLE;
+    if (
+      bundle &&
+      bundle.rootName === targetRootName &&
+      bundle.index &&
+      typeof bundle.files === "object"
+    ) {
+      baseIndex = bundle.index;
+      baseBundledFiles = bundle.files;
+    }
   }
 
-  try {
-    const res = await fetch(`${targetRootName}/.index.json`, { cache: "no-store" });
-    if (!res.ok) return false;
-    const index = await res.json();
-    rootName = targetRootName;
-    rootIndex = index;
-    bundledFiles = {};
-    cwd = [];
-    renderPrompt();
-    return true;
-  } catch (_) {
+  if (!baseIndex) {
     return false;
   }
+
+  // merge overlay if present
+  const overlay = loadOverlayFS();
+  if (overlay && overlay.rootName === targetRootName) {
+    mergeIndex(baseIndex, overlay.rootIndex);
+    baseBundledFiles = { ...baseBundledFiles, ...overlay.bundledFiles };
+  }
+
+  rootName = targetRootName;
+  rootIndex = baseIndex;
+  bundledFiles = baseBundledFiles;
+  cwd = [];
+  renderPrompt();
+  return true;
 }
 
 function registerCommands() {
@@ -1132,7 +1265,10 @@ function registerCommands() {
       const targets = args.filter((arg) => arg !== "-a");
       const target = targets[0] || ".";
       const parts = resolvePath(target);
-      const node = getNodeByPath(parts);
+      let node = getNodeByPath(parts);
+      if (!node) {
+        node = await ensureFileNode(parts);
+      }
       if (!node) {
         return { text: `ls: cannot access '${target}': No such file or directory`, type: "error" };
       }
@@ -1143,6 +1279,8 @@ function registerCommands() {
           entries: [{ label: name, kind: isLikelyExecutable(name) ? "executable" : "file" }],
         };
       }
+      // if directory, attempt to augment listing from server
+      await augmentDirectoryFromServer(parts);
 
       const entries = listDirectoryEntries(node).filter((entry) => showAll || !entry.name.startsWith("."));
       const printable = entries.map((entry) => {
@@ -1169,10 +1307,13 @@ function registerCommands() {
 
       const target = args[0] || "~";
       const parts = resolvePath(target);
-      const node = getNodeByPath(parts);
+      let node = getNodeByPath(parts);
+      if (!node) {
+        node = await ensureDirNode(parts);
+      }
 
       if (!node) {
-        const suggestionPool = suggestPathNames(cwd);
+        const suggestionPool = await suggestPathNames(cwd);
         const leaf = target.split("/").filter(Boolean).slice(-1)[0] || target;
         const suggestions = suggestFromSet(leaf, suggestionPool);
         const suffix = suggestions.length ? `\nDid you mean: ${suggestions.join(", ")} ?` : "";
@@ -1199,7 +1340,10 @@ function registerCommands() {
       const chunks = [];
       for (const target of args) {
         const parts = resolvePath(target);
-        const node = getNodeByPath(parts);
+        let node = getNodeByPath(parts);
+        if (!node) {
+          node = await ensureFileNode(parts);
+        }
 
         if (!node) return { text: `cat: ${target}: No such file or directory`, type: "error" };
         if (node.type !== "file") return { text: `cat: ${target}: Is a directory`, type: "error" };
@@ -1280,7 +1424,12 @@ function registerCommands() {
 
       const target = splitTargetPath(targetArg);
       if (target.error) return { text: `rm: ${target.error}`, type: "error" };
-      const parent = getDirOrNull(target.parentParts);
+      let parent = getDirOrNull(target.parentParts);
+      if (!parent || !parent.children[target.name]) {
+        // maybe the file exists on server
+        await ensureFileNode(target.parts);
+        parent = getDirOrNull(target.parentParts);
+      }
       if (!parent || !parent.children[target.name]) {
         return { text: `rm: cannot remove '${targetArg}': No such file or directory`, type: "error" };
       }
@@ -1333,7 +1482,11 @@ function registerCommands() {
       if (src.error) return { text: `mv: ${src.error}`, type: "error" };
       if (dst.error) return { text: `mv: ${dst.error}`, type: "error" };
 
-      const srcParent = getDirOrNull(src.parentParts);
+      let srcParent = getDirOrNull(src.parentParts);
+      if (!srcParent || !srcParent.children[src.name]) {
+        await ensureFileNode(src.parts);
+        srcParent = getDirOrNull(src.parentParts);
+      }
       const dstParent = getDirOrNull(dst.parentParts);
       if (!srcParent || !srcParent.children[src.name]) {
         return { text: `mv: cannot stat '${args[0]}': No such file or directory`, type: "error" };
@@ -1381,7 +1534,19 @@ function registerCommands() {
       if (src.error) return { text: `cp: ${src.error}`, type: "error" };
       if (dst.error) return { text: `cp: ${dst.error}`, type: "error" };
 
-      const srcParent = getDirOrNull(src.parentParts);
+      let srcParent = getDirOrNull(src.parentParts);
+      if (!srcParent) {
+        // maybe directory doesn't exist locally; try creating via server
+        await ensureFileNode(src.parentParts.concat([src.name]));
+        srcParent = getDirOrNull(src.parentParts);
+      }
+      if (!srcParent || !srcParent.children[src.name]) {
+        // try fetching file directly
+        const fileNode = await ensureFileNode(src.parentParts.concat([src.name]));
+        if (fileNode) {
+          srcParent = getDirOrNull(src.parentParts);
+        }
+      }
       const dstParent = getDirOrNull(dst.parentParts);
       if (!srcParent || !srcParent.children[src.name]) {
         return { text: `cp: cannot stat '${plain[0]}': No such file or directory`, type: "error" };
@@ -1417,7 +1582,10 @@ function registerCommands() {
 
       const target = splitTargetPath(fileArg);
       if (target.error) return { text: `head: ${target.error}`, type: "error" };
-      const node = getNodeByPath(target.parts);
+      let node = getNodeByPath(target.parts);
+      if (!node) {
+        node = await ensureFileNode(target.parts);
+      }
       if (!node) return { text: `head: cannot open '${fileArg}': No such file or directory`, type: "error" };
       if (node.type !== "file") return { text: `head: error reading '${fileArg}': Is a directory`, type: "error" };
 
@@ -1443,7 +1611,10 @@ function registerCommands() {
 
       const target = splitTargetPath(fileArg);
       if (target.error) return { text: `tail: ${target.error}`, type: "error" };
-      const node = getNodeByPath(target.parts);
+      let node = getNodeByPath(target.parts);
+      if (!node) {
+        node = await ensureFileNode(target.parts);
+      }
       if (!node) return { text: `tail: cannot open '${fileArg}': No such file or directory`, type: "error" };
       if (node.type !== "file") return { text: `tail: error reading '${fileArg}': Is a directory`, type: "error" };
 
@@ -1463,7 +1634,10 @@ function registerCommands() {
 
       const target = splitTargetPath(args[0]);
       if (target.error) return { text: `less: ${target.error}`, type: "error" };
-      const node = getNodeByPath(target.parts);
+      let node = getNodeByPath(target.parts);
+      if (!node) {
+        node = await ensureFileNode(target.parts);
+      }
       if (!node) return { text: `less: cannot open '${args[0]}': No such file or directory`, type: "error" };
       if (node.type !== "file") return { text: `less: ${args[0]}: Is a directory`, type: "error" };
 
@@ -1504,7 +1678,10 @@ function registerCommands() {
           continue;
         }
 
-        const node = getNodeByPath(target.parts);
+        let node = getNodeByPath(target.parts);
+        if (!node) {
+          node = await ensureFileNode(target.parts);
+        }
         if (!node) {
           results.push(`grep: ${fileArg}: No such file or directory`);
           continue;
@@ -1541,13 +1718,43 @@ function registerCommands() {
 
       const target = args[0] || ".";
       const parts = resolvePath(target);
-      const node = getNodeByPath(parts);
+      // try to ensure the target directory exists (server probe)
+      let node = getNodeByPath(parts);
+      if (!node) {
+        node = await ensureDirNode(parts);
+      }
       if (!node) return { text: `tree: ${target}: No such file or directory`, type: "error" };
       if (node.type !== "dir") return { text: `tree: ${target}: Not a directory`, type: "error" };
+
+      // augment directories recursively so server files are included
+      async function walkAndAugment(pathParts, dirNode) {
+        await augmentDirectoryFromServer(pathParts);
+        for (const name of Object.keys(dirNode.children)) {
+          const child = dirNode.children[name];
+          if (child.type === "dir") {
+            await walkAndAugment(pathParts.concat(name), child);
+          }
+        }
+      }
+      await walkAndAugment(parts, node);
+
+      // reload base index (merge overlay) so newly generated files show up
+      await refreshIndex();
 
       const rootLabel = target === "." ? "." : parts[parts.length - 1] || "/";
       const lines = buildTreeLines(node, rootLabel);
       return { text: lines.join("\n") };
+    },
+  });
+
+  registerCommand({
+    name: "refresh",
+    description: "Reload base filesystem index (keeps your changes)",
+    async run() {
+      if (!rootName) return { text: "Filesystem unavailable.", type: "error" };
+      const ok = await refreshIndex();
+      if (ok) return { text: "Filesystem index refreshed." };
+      return { text: "refresh: failed to reload base index", type: "error" };
     },
   });
 
@@ -1885,7 +2092,7 @@ async function tryAutocomplete() {
     ? resolvePath(last.split("/").slice(0, -1).join("/"))
     : [...cwd];
   const prefix = last.includes("/") ? last.split("/").slice(-1)[0] : last;
-  const names = suggestPathNames(baseForSuggestions);
+  const names = await suggestPathNames(baseForSuggestions);
   const matches = suggestFromSet(prefix, names);
 
   if (matches.length === 1) {
