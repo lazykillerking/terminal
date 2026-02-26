@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.1";
+const TERMINAL_VERSION = "4.5.2";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -38,6 +38,7 @@ let pendingSudo = null;
 let pendingPasswd = null;
 let promptOverride = null;
 let bootInProgress = false;
+let unlockGlitchPlayed = false;
 
 const BOOT_LINE_DELAY_MS = 36;
 const BOOT_CLEAR_PAUSE_MS = 120;
@@ -71,6 +72,19 @@ const BOOT_ASCII = [
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runUnlockGlitchOnce() {
+  if (unlockGlitchPlayed) return false;
+  unlockGlitchPlayed = true;
+  terminal.classList.remove("unlock-glitch");
+  // Force reflow so animation restarts reliably when class toggles.
+  void terminal.offsetWidth;
+  terminal.classList.add("unlock-glitch");
+  setTimeout(() => {
+    terminal.classList.remove("unlock-glitch");
+  }, 650);
+  return true;
 }
 
 function runStartupMatrixFade() {
@@ -720,10 +734,12 @@ function registerCommands() {
     name: "help",
     description: "List available commands",
     async run() {
-      const rows = getCommandNames().map((name) => {
-        const entry = commandRegistry.get(name);
-        return `${name}${entry.description ? ` - ${entry.description}` : ""}`;
-      });
+      const rows = getCommandNames()
+        .filter((name) => !commandRegistry.get(name)?.hidden)
+        .map((name) => {
+          const entry = commandRegistry.get(name);
+          return `${name}${entry.description ? ` - ${entry.description}` : ""}`;
+        });
       return { text: `Available commands:\n${rows.join("\n")}`, type: "info" };
     },
   });
@@ -741,6 +757,18 @@ function registerCommands() {
     description: "Show terminal version",
     async run() {
       return { text: `LazyKillerKing Terminal v${TERMINAL_VERSION}` };
+    },
+  });
+
+  registerCommand({
+    name: "unlock",
+    hidden: true,
+    async run() {
+      const triggered = runUnlockGlitchOnce();
+      if (!triggered) {
+        return { text: "unlock: already triggered this session (refresh to replay)", type: "info" };
+      }
+      return { text: "" };
     },
   });
 

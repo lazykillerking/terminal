@@ -149,3 +149,45 @@ body {
 .ls-entry-file {
   color: #d0d0d0;
 }
+
+
+#terminal.unlock-glitch {
+  animation: unlockGlitchFlash 650ms steps(2, end) 1;
+}
+
+@keyframes unlockGlitchFlash {
+  0% {
+    filter: none;
+    transform: translateX(0) skewX(0deg);
+  }
+
+  10% {
+    filter: saturate(1.9) brightness(1.35) contrast(1.3) hue-rotate(-18deg);
+    transform: translateX(-3px) skewX(-2deg);
+  }
+
+  22% {
+    filter: saturate(0.6) brightness(0.85) contrast(1.15) hue-rotate(16deg);
+    transform: translateX(3px) skewX(2deg);
+  }
+
+  36% {
+    filter: saturate(2.1) brightness(1.4) contrast(1.35) hue-rotate(-24deg);
+    transform: translateX(-2px) skewX(-1.5deg);
+  }
+
+  52% {
+    filter: saturate(0.7) brightness(0.9) contrast(1.1) hue-rotate(14deg);
+    transform: translateX(2px) skewX(1deg);
+  }
+
+  72% {
+    filter: saturate(1.4) brightness(1.18) contrast(1.2) hue-rotate(-10deg);
+    transform: translateX(-1px) skewX(-0.6deg);
+  }
+
+  100% {
+    filter: none;
+    transform: translateX(0) skewX(0deg);
+  }
+}
