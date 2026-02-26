@@ -54,11 +54,11 @@ body {
 }
 
 .line-error {
-  color: #ff5f5f;
+  color: #ff4d4d;
 }
 
 .line-info {
-  color: #9aa0a6;
+  color: #6bd6ff;
 }
 
 .line-success {
@@ -84,6 +84,7 @@ body {
   margin-right: 8px;
   color: #73d216;
   white-space: nowrap;
+  text-shadow: 0 0 6px rgba(115, 210, 22, 0.32);
 }
 
 #commandInput {
@@ -107,13 +108,25 @@ body {
   height: 1.1em;
   left: 0;
   background: #d0d0d0;
-  animation: blink 1s steps(1, end) infinite;
+  animation: blink 1.05s cubic-bezier(0.42, 0, 0.58, 1) infinite;
   pointer-events: none;
 }
 
 @keyframes blink {
-  50% {
-    opacity: 0;
+  0% {
+    opacity: 1;
+  }
+
+  42% {
+    opacity: 1;
+  }
+
+  70% {
+    opacity: 0.12;
+  }
+
+  100% {
+    opacity: 1;
   }
 }
 
@@ -122,4 +135,17 @@ body {
   visibility: hidden;
   white-space: pre;
   font: inherit;
+}
+
+
+.ls-entry-directory {
+  color: #5aa9ff;
+}
+
+.ls-entry-executable {
+  color: #73d216;
+}
+
+.ls-entry-file {
+  color: #d0d0d0;
 }

@@ -15,11 +15,11 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.4.8";
+const TERMINAL_VERSION = "4.4.9";
 
-// Simple folder-password map for future root switching with `mount`.
-const MOUNT_PASSWORDS = {
-  terminal_fs: "lkk-root",
+// Per-folder mount password hashes (SHA-256) for root switching with `mount`.
+const MOUNT_PASSWORD_HASHES = {
+  terminal_fs: "076c9567f26d4cd5acbc8574e91d8ff80adb450601b3ff16686e8c5ced9c86d2",
 };
 
 // Command Architecture Refactor:
@@ -209,6 +209,33 @@ function printLine(text = "", type = "normal") {
   output.appendChild(div);
 }
 
+function printLsLine(entries = []) {
+  const div = document.createElement("div");
+  div.className = "line";
+
+  entries.forEach((entry, index) => {
+    const span = document.createElement("span");
+    span.className = `ls-entry ls-entry-${entry.kind || "file"}`;
+    span.textContent = entry.label || entry.name;
+    div.appendChild(span);
+
+    if (index < entries.length - 1) {
+      div.appendChild(document.createTextNode("  "));
+    }
+  });
+
+  output.appendChild(div);
+}
+
+function printCommandResult(result) {
+  if (!result || !result.text) return;
+  if (Array.isArray(result.entries) && result.entries.length) {
+    printLsLine(result.entries);
+    return;
+  }
+  printLine(result.text, result.type || "normal");
+}
+
 function printBootStatusLine(label, ok = true, type = "success") {
   const div = document.createElement("div");
   div.className = `line line-${type}`;
@@ -282,6 +309,13 @@ function getConfiguredSudoHash() {
 
 async function verifySudoPassword(password) {
   const configured = getConfiguredSudoHash();
+  if (!configured) return false;
+  const provided = await sha256Hex(password);
+  return provided === configured;
+}
+
+async function verifyMountPassword(folder, password) {
+  const configured = MOUNT_PASSWORD_HASHES[folder];
   if (!configured) return false;
   const provided = await sha256Hex(password);
   return provided === configured;
@@ -594,6 +628,15 @@ function listDirectoryEntries(dirNode) {
     }));
 }
 
+function isLikelyExecutable(name) {
+  return /\.(sh|bash|zsh|ps1|bat|cmd|exe|com|py|js|mjs|cjs)$/i.test(name);
+}
+
+function getDisplayKind(entry) {
+  if (entry.kind === "directory") return "directory";
+  return isLikelyExecutable(entry.name) ? "executable" : "file";
+}
+
 // Build ASCII tree output recursively.
 function buildTreeLines(node, name = ".", prefix = "", includeSelf = true, lines = []) {
   if (includeSelf) {
@@ -776,13 +819,26 @@ function registerCommands() {
       }
       if (node.type === "file") {
         const name = parts[parts.length - 1] || target;
-        return { text: name };
+        return {
+          text: name,
+          entries: [{ label: name, kind: isLikelyExecutable(name) ? "executable" : "file" }],
+        };
       }
 
       const entries = listDirectoryEntries(node).filter((entry) => showAll || !entry.name.startsWith("."));
-      const printable = entries.map((entry) => (entry.kind === "directory" ? `${entry.name}/` : entry.name));
-      if (showAll) printable.unshift(".", "..");
-      return { text: printable.join("  ") };
+      const printable = entries.map((entry) => {
+        const displayKind = getDisplayKind(entry);
+        const label = entry.kind === "directory" ? `${entry.name}/` : entry.name;
+        return { label, kind: displayKind };
+      });
+      if (showAll) {
+        printable.unshift({ label: "..", kind: "directory" });
+        printable.unshift({ label: ".", kind: "directory" });
+      }
+      return {
+        text: printable.map((entry) => entry.label).join("  "),
+        entries: printable,
+      };
     },
   });
 
@@ -1211,10 +1267,11 @@ function registerCommands() {
 
       const folder = args[0];
       const password = args[1];
-      if (!Object.prototype.hasOwnProperty.call(MOUNT_PASSWORDS, folder)) {
+      if (!Object.prototype.hasOwnProperty.call(MOUNT_PASSWORD_HASHES, folder)) {
         return { text: "mount: access denied", type: "error" };
       }
-      if (MOUNT_PASSWORDS[folder] !== password) {
+      const validMountPassword = await verifyMountPassword(folder, password);
+      if (!validMountPassword) {
         return { text: "mount: invalid password", type: "error" };
       }
 
@@ -1297,6 +1354,7 @@ async function runCommandLine(raw, context = { elevated: false, stdin: "" }) {
   let stdinText = context.stdin || "";
   let lastOutput = "";
   let lastType = "normal";
+  let lastEntries = null;
 
   for (const segment of parsed.segments) {
     if (segment.stdinPath) {
@@ -1313,18 +1371,20 @@ async function runCommandLine(raw, context = { elevated: false, stdin: "" }) {
 
     let stdoutText = result?.text ?? "";
     lastType = result?.type || "normal";
+    lastEntries = Array.isArray(result?.entries) ? result.entries : null;
 
     if (segment.stdoutPath) {
       const redirectedOut = await writeRedirectOutput(segment.stdoutPath, stdoutText, segment.append);
       if (!redirectedOut.ok) return { text: redirectedOut.error, type: "error" };
       stdoutText = "";
+      lastEntries = null;
     }
 
     stdinText = stdoutText;
     lastOutput = stdoutText;
   }
 
-  return { text: lastOutput, type: lastType };
+  return { text: lastOutput, type: lastType, entries: lastEntries };
 }
 
 // Executes one command line submit cycle:
@@ -1395,7 +1455,7 @@ async function handleEnter() {
       pendingSudo = null;
       stopSecretInput();
       const result = await runCommandLine(commandLine, { elevated: true, stdin: "" });
-      if (result && result.text) printLine(result.text, result.type || "normal");
+      if (result && result.text) printCommandResult(result);
     }
 
     if (wasNearBottom) scrollOutputToBottom();
@@ -1415,7 +1475,7 @@ async function handleEnter() {
     try {
       const result = await runCommandLine(rawValue, { elevated: false, stdin: "" });
       if (result && result.text) {
-        printLine(result.text, result.type || "normal");
+        printCommandResult(result);
       }
     } catch (error) {
       printLine(`error: ${error.message || String(error)}`, "error");
