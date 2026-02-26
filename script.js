@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.4.9";
+const TERMINAL_VERSION = "4.5.1";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
