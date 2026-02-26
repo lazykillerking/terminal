@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.5";
+const TERMINAL_VERSION = "4.5.6";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -826,6 +826,22 @@ function registerCommands() {
     description: "Show terminal version",
     async run() {
       return { text: `LazyKillerKing Terminal v${TERMINAL_VERSION}` };
+    },
+  });
+
+  registerCommand({
+    name: "neofetch",
+    description: "Display system information with ASCII banner",
+    async run() {
+      const lines = [];
+      BOOT_ASCII.forEach((line) => lines.push(line));
+      lines.push(""); // Empty line for spacing
+      lines.push(`Terminal: LazyKillerKing v${TERMINAL_VERSION}`);
+      lines.push(`User: ${user}`);
+      lines.push(`Hostname: lkk-terminal`);
+      lines.push(`Shell: terminal.sh`);
+      lines.push(`OS: Browser-based Virtual FS`);
+      return { text: lines.join("\n"), type: "info" };
     },
   });
 
@@ -1648,7 +1664,7 @@ async function renderBootSequence() {
   BOOT_ASCII.forEach((line) => printLine(line, "info"));
   printLine("");
   printLine(`Welcome to Terminal v${TERMINAL_VERSION}`, "success");
-  printLine(`Session ready for ${user}. Type 'help' to begin.`, "info");
+  printLine(`Session ready. Type 'help' to begin.`, "info");
   printLine("");
   scrollOutputToBottom();
 }
