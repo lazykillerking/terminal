@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.4.7";
+const TERMINAL_VERSION = "4.4.8";
 
 // Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
@@ -175,7 +175,10 @@ function focusInput() {
 }
 
 function scrollOutputToBottom() {
-  terminal.scrollTop = terminal.scrollHeight;
+  terminal.scrollTo({
+    top: terminal.scrollHeight,
+    behavior: bootInProgress ? "auto" : "smooth",
+  });
 }
 
 // Prompt mirrors shell-like working directory display.
