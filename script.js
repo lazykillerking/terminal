@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.4.6";
+const TERMINAL_VERSION = "4.4.7";
 
 // Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
@@ -1550,9 +1550,13 @@ input.addEventListener("keydown", async (e) => {
 window.addEventListener("focus", focusInput);
 window.addEventListener("resize", syncCursorPosition);
 document.addEventListener("pointerdown", (event) => {
-  if (event.target !== input) {
-    setTimeout(focusInput, 0);
-  }
+  if (event.target === input) return;
+
+  setTimeout(() => {
+    const selection = window.getSelection();
+    if (selection && selection.type === "Range") return;
+    focusInput();
+  }, 0);
 });
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) focusInput();
