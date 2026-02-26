@@ -15,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.5.6";
+const TERMINAL_VERSION = "4.5.7";
 
 // Per-folder mount password hashes (SHA-256) for root switching with `mount`.
 const MOUNT_PASSWORD_HASHES = {
@@ -891,6 +891,15 @@ function registerCommands() {
     description: "Print arguments",
     async run(args) {
       return { text: args.join(" ") };
+    },
+  });
+
+  registerCommand({
+    name: "exit",
+    description: "Close the terminal",
+    async run() {
+      window.close();
+      return { text: "Goodbye!" };
     },
   });
 
