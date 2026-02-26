@@ -14,6 +14,18 @@ body {
   font-family: "Ubuntu Mono", "DejaVu Sans Mono", "Consolas", monospace;
   font-size: 18px;
   line-height: 1.35;
+  overflow: hidden;
+}
+
+#matrixFx {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(1px);
+  z-index: 0;
 }
 
 #terminal {
@@ -21,6 +33,8 @@ body {
   overflow-y: auto;
   overflow-anchor: none;
   padding: 10px 12px;
+  position: relative;
+  z-index: 1;
 }
 
 #output {
@@ -49,6 +63,10 @@ body {
 
 .line-success {
   color: #73d216;
+}
+
+.boot-status-tag {
+  color: #c6f8a7;
 }
 
 .line-suggestion {

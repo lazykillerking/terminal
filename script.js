@@ -5,6 +5,7 @@ const terminal = document.getElementById("terminal");
 const inputLine = document.querySelector(".input-line");
 const cursor = document.getElementById("cursor");
 const cursorMeasure = document.getElementById("cursorMeasure");
+const matrixFx = document.getElementById("matrixFx");
 inputLine.style.display = "none";
 
 // Command history state for ArrowUp/ArrowDown navigation.
@@ -14,7 +15,7 @@ let draftInput = "";
 
 const user = "lkk";
 const DEFAULT_ROOT = "terminal_fs";
-const TERMINAL_VERSION = "4.3.9";
+const TERMINAL_VERSION = "4.4.5";
 
 // Simple folder-password map for future root switching with `mount`.
 const MOUNT_PASSWORDS = {
@@ -54,6 +55,11 @@ const BOOT_FOLLOWUP_LABELS = [
   "Calibrating cursor renderer",
   "Finalizing security context",
 ];
+const MATRIX_FX_DURATION_MS = 2000;
+const MATRIX_FX_MAX_OPACITY = 1;
+const MATRIX_FX_COLUMN_REVEAL_MS = 900;
+const MATRIX_FX_FONT_SIZE = 22;
+const MATRIX_FX_CHARS = "01ABCDEFGHIJKLMNOPQRSTUVWXYZ$#*+-";
 const BOOT_ASCII = [
   " _______                  _             _ ",
   "|__   __|                (_)           | |",
@@ -65,6 +71,83 @@ const BOOT_ASCII = [
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function runStartupMatrixFade() {
+  if (!matrixFx) return Promise.resolve();
+
+  const ctx = matrixFx.getContext("2d");
+  if (!ctx) return Promise.resolve();
+
+  let rafId = 0;
+  let width = 0;
+  let height = 0;
+  let columns = 0;
+  let drops = [];
+  let speeds = [];
+
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    width = window.innerWidth;
+    height = window.innerHeight;
+    matrixFx.width = Math.floor(width * dpr);
+    matrixFx.height = Math.floor(height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    columns = Math.max(1, Math.floor(width / MATRIX_FX_FONT_SIZE));
+    drops = Array.from({ length: columns }, () => -(Math.random() * 24));
+    speeds = Array.from({ length: columns }, () => 0.22 + Math.random() * 0.38);
+  }
+
+  resizeCanvas();
+  matrixFx.style.opacity = String(MATRIX_FX_MAX_OPACITY);
+  const startedAt = performance.now();
+  const fadeStartAt = MATRIX_FX_DURATION_MS * 0.55;
+
+  return new Promise((resolve) => {
+    function finish() {
+      cancelAnimationFrame(rafId);
+      matrixFx.style.opacity = "0";
+      ctx.clearRect(0, 0, width, height);
+      window.removeEventListener("resize", resizeCanvas);
+      resolve();
+    }
+
+    function frame(now) {
+      const elapsed = now - startedAt;
+      if (elapsed >= MATRIX_FX_DURATION_MS) {
+        finish();
+        return;
+      }
+
+    const revealProgress = Math.min(1, elapsed / MATRIX_FX_COLUMN_REVEAL_MS);
+    const activeColumns = Math.max(1, Math.floor(columns * revealProgress));
+    const fadeProgress = elapsed <= fadeStartAt ? 1 : 1 - (elapsed - fadeStartAt) / (MATRIX_FX_DURATION_MS - fadeStartAt);
+    const visibility = Math.max(0, Math.min(1, fadeProgress));
+
+    matrixFx.style.opacity = String(MATRIX_FX_MAX_OPACITY * visibility);
+    ctx.fillStyle = "rgba(0, 0, 0, 0.14)";
+    ctx.fillRect(0, 0, width, height);
+    ctx.font = `${MATRIX_FX_FONT_SIZE}px "Ubuntu Mono", monospace`;
+    ctx.textBaseline = "top";
+    ctx.fillStyle = `rgba(115, 210, 22, ${0.55 * visibility})`;
+
+    for (let col = 0; col < activeColumns; col += 1) {
+      const x = col * MATRIX_FX_FONT_SIZE;
+      const y = drops[col] * MATRIX_FX_FONT_SIZE;
+      const char = MATRIX_FX_CHARS[(Math.floor(elapsed / 40) + col) % MATRIX_FX_CHARS.length];
+      ctx.fillText(char, x, y);
+      drops[col] += speeds[col];
+      if (y > height + MATRIX_FX_FONT_SIZE) {
+        drops[col] = -(Math.random() * 20);
+      }
+    }
+
+      rafId = requestAnimationFrame(frame);
+    }
+
+    window.addEventListener("resize", resizeCanvas);
+    rafId = requestAnimationFrame(frame);
+  });
 }
 
 // Moves the fake block cursor so it tracks the typed text width.
@@ -112,6 +195,14 @@ function printLine(text = "", type = "normal") {
   const div = document.createElement("div");
   div.className = `line line-${type}`;
   div.textContent = text;
+  output.appendChild(div);
+}
+
+function printBootStatusLine(label, ok = true, type = "success") {
+  const div = document.createElement("div");
+  div.className = `line line-${type}`;
+  const tag = ok ? " OK " : "FAIL";
+  div.innerHTML = `<span class="boot-status-tag">[${tag}]</span> ${escapeHtml(label)}...`;
   output.appendChild(div);
 }
 
@@ -1332,11 +1423,6 @@ function setPromptVisible(visible) {
   inputLine.style.display = visible ? "flex" : "none";
 }
 
-function formatBootStatus(label, ok = true) {
-  const tag = ok ? " OK " : "FAIL";
-  return `[${tag}] ${label}...`;
-}
-
 function getBootFillLineCount() {
   const style = getComputedStyle(document.body);
   const lineHeight = parseFloat(style.lineHeight) || 24;
@@ -1346,10 +1432,10 @@ function getBootFillLineCount() {
 function getBootStatusLineByIndex(index) {
   if (index < BOOT_STEPS.length) {
     const step = BOOT_STEPS[index];
-    return { text: formatBootStatus(step.label), type: step.type };
+    return { label: step.label, ok: true, type: step.type };
   }
   const label = BOOT_FOLLOWUP_LABELS[(index - BOOT_STEPS.length) % BOOT_FOLLOWUP_LABELS.length];
-  return { text: formatBootStatus(label), type: "success" };
+  return { label, ok: true, type: "success" };
 }
 
 async function renderBootSequence() {
@@ -1363,7 +1449,7 @@ async function renderBootSequence() {
   const bootLines = getBootFillLineCount();
   for (let i = 0; i < bootLines; i += 1) {
     const line = getBootStatusLineByIndex(i);
-    printLine(line.text, line.type);
+    printBootStatusLine(line.label, line.ok, line.type);
     scrollOutputToBottom();
     await sleep(BOOT_LINE_DELAY_MS);
   }
@@ -1468,6 +1554,7 @@ input.addEventListener("input", syncCursorPosition);
 // Boot sequence: show startup banner, auto-mount root, then expose prompt.
 async function boot() {
   registerCommands();
+  await runStartupMatrixFade();
   await renderBootSequence();
 
   const ok = await loadRootIndex(DEFAULT_ROOT);
